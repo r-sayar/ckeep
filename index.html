@@ -3,950 +3,186 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<meta name="theme-color" content="#fbbc04" />
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#202124" media="(prefers-color-scheme: dark)" />
+<meta name="description" content="A fast, offline-first note app." />
 <link rel="manifest" href="/manifest.json" />
 <link rel="icon" href="/icon.svg" type="image/svg+xml" />
 <link rel="apple-touch-icon" href="/icon.svg" />
 <title>Keep</title>
 <script>
-  // Synchronous auth bootstrap — sets the initial UI state from localStorage
-  // BEFORE the Supabase JS module loads, so the user sees either the composer
-  // (instantly) or the login screen (instantly), never a loading flash.
+  /* Synchronous bootstrap. Runs before CSS paints so there is never a flash of
+     the wrong theme or the wrong screen.
+       1. theme  -> <html class="dark">
+       2. auth   -> <html class="authed"> or <html class="unauth">
+     Supabase stores its session in localStorage either as raw JSON or, since
+     supabase-js 2.43, as "base64-<base64url payload>". Handle both. */
   (function () {
+    var H = document.documentElement;
+
     try {
-      const raw = localStorage.getItem("sb-sywglobxvtxayvelhunb-auth-token");
-      const sess = raw ? JSON.parse(raw) : null;
+      var t = localStorage.getItem("keep_theme") || "system";
+      var dark = t === "dark" || (t === "system" &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches);
+      if (dark) H.classList.add("dark");
+    } catch (e) {}
+
+    try {
+      var v = localStorage.getItem("keep_view");
+      if (v === "list") H.classList.add("list-view");
+    } catch (e) {}
+
+    try {
+      var raw = localStorage.getItem("sb-sywglobxvtxayvelhunb-auth-token");
+      if (raw && raw.indexOf("base64-") === 0) {
+        var b = raw.slice(7).replace(/-/g, "+").replace(/_/g, "/");
+        var bin = atob(b);
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        raw = new TextDecoder().decode(bytes);
+      }
+      var sess = raw ? JSON.parse(raw) : null;
       if (sess && sess.user && sess.user.id) {
-        document.documentElement.classList.add("authed");
+        H.classList.add("authed");
         window.__BOOT_USER = sess.user;
       } else {
-        document.documentElement.classList.add("unauth");
+        H.classList.add("unauth");
       }
     } catch (e) {
-      document.documentElement.classList.add("unauth");
+      H.classList.add("unauth");
     }
   })();
 </script>
-<style>
-  :root {
-    --bg: #fafafa;
-    --fg: #202124;
-    --muted: #5f6368;
-    --border: #e0e0e0;
-    --accent: #fbbc04;
-    --card: #ffffff;
-    --hover: rgba(0,0,0,0.04);
-    --link: #1a73e8;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg);
-    color: var(--fg);
-    min-height: 100vh;
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-  header {
-    padding: 14px 20px;
-    border-bottom: 1px solid var(--border);
-    background: #fff;
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding-top: calc(14px + env(safe-area-inset-top));
-    flex-wrap: wrap;
-  }
-  header h1 {
-    margin: 0;
-    font-size: 20px;
-    font-weight: 500;
-    color: var(--muted);
-  }
-  header h1 span { color: var(--accent); }
-  .search-wrap {
-    flex: 1 1 200px;
-    min-width: 200px;
-    max-width: 480px;
-    position: relative;
-  }
-  .search-wrap input {
-    width: 100%;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 8px 12px 8px 32px;
-    font-family: inherit;
-    font-size: 14px;
-    background: #f1f3f4;
-    outline: none;
-  }
-  .search-wrap input:focus { background: #fff; border-color: var(--accent); }
-  .search-wrap::before {
-    content: "⌕";
-    position: absolute;
-    left: 10px;
-    top: 50%;
-    transform: translateY(-50%);
-    color: var(--muted);
-    font-size: 16px;
-    pointer-events: none;
-  }
-  .actions { display: flex; gap: 8px; align-items: center; }
-  main {
-    max-width: 720px;
-    margin: 0 auto;
-    padding: 20px 16px 80px;
-  }
-  .composer {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px 16px;
-    margin-bottom: 16px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-  }
-  .composer input, .composer textarea {
-    width: 100%;
-    border: none;
-    outline: none;
-    font-family: inherit;
-    font-size: 14px;
-    color: var(--fg);
-    background: transparent;
-    resize: none;
-  }
-  .composer input {
-    font-weight: 500;
-    font-size: 16px;
-    margin-bottom: 8px;
-  }
-  .composer textarea { min-height: 40px; }
-  .composer-actions {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-top: 8px;
-  }
-  .composer-hint {
-    font-size: 11px;
-    color: var(--muted);
-  }
-  kbd {
-    font-family: -apple-system, "SF Mono", Menlo, monospace;
-    font-size: 10px;
-    background: #f1f3f4;
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 1px 5px;
-  }
-  .toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin: 0 4px 12px;
-    font-size: 12px;
-    color: var(--muted);
-  }
-  .toolbar label {
-    cursor: pointer;
-    user-select: none;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  button {
-    border: none;
-    background: transparent;
-    font-family: inherit;
-    font-size: 14px;
-    color: var(--muted);
-    cursor: pointer;
-    padding: 8px 14px;
-    border-radius: 6px;
-    transition: background 0.1s;
-  }
-  button:hover { background: var(--hover); }
-  button.primary {
-    color: var(--fg);
-    font-weight: 500;
-    border: 1px solid var(--border);
-  }
-  button.icon { padding: 8px 10px; font-size: 16px; }
-  .list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .note {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 16px;
-    transition: box-shadow 0.15s;
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .note.archived {
-    background: #f6f8fa;
-    border-style: dashed;
-  }
-  .note.pinned::before {
-    content: "📌";
-    position: absolute;
-    top: 8px;
-    right: 32px;
-    font-size: 12px;
-    opacity: 0.7;
-  }
-  .note:hover { box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
-  .note h2 {
-    margin: 0;
-    font-size: 15px;
-    font-weight: 600;
-    word-wrap: break-word;
-    padding-right: 32px;
-  }
-  .note p {
-    margin: 0;
-    font-size: 14px;
-    color: var(--fg);
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    overflow: hidden;
-    display: -webkit-box;
-    -webkit-line-clamp: 12;
-    -webkit-box-orient: vertical;
-  }
-  .note .meta {
-    font-size: 11px;
-    color: var(--muted);
-    margin-top: 6px;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-  }
-  .note .source {
-    color: var(--link);
-    text-decoration: none;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 240px;
-  }
-  .note .source:hover { text-decoration: underline; }
-  .chip {
-    background: #f1f3f4;
-    border-radius: 10px;
-    padding: 1px 8px;
-    font-size: 10px;
-    color: var(--muted);
-  }
-  .note .delete {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    opacity: 0;
-    font-size: 14px;
-    padding: 4px 10px;
-    color: var(--muted);
-  }
-  .note:hover .delete, .note:focus-within .delete { opacity: 1; }
-  @media (hover: none) { .note .delete { opacity: 1; } }
-  .empty {
-    text-align: center;
-    color: var(--muted);
-    padding: 48px 0;
-    font-size: 14px;
-  }
-  .load-more {
-    text-align: center;
-    margin: 16px 0;
-  }
-  .toast {
-    position: fixed;
-    bottom: calc(20px + env(safe-area-inset-bottom));
-    left: 50%;
-    transform: translateX(-50%);
-    background: #202124;
-    color: #fff;
-    padding: 10px 16px;
-    border-radius: 6px;
-    font-size: 13px;
-    opacity: 0;
-    transition: opacity 0.2s;
-    pointer-events: none;
-    z-index: 100;
-  }
-  .toast.show { opacity: 1; }
-  /* ===== Edit mode ===== */
-  .note { cursor: text; }
-  .note.editing {
-    background: #fffceb;
-    border-color: var(--accent);
-    cursor: default;
-  }
-  .note.editing .delete { display: none; }
-  .note.editing input.edit-title,
-  .note.editing textarea.edit-body {
-    width: 100%;
-    border: none;
-    background: transparent;
-    outline: none;
-    font-family: inherit;
-    color: var(--fg);
-    padding: 0;
-    margin: 0 0 4px;
-    resize: none;
-  }
-  .note.editing input.edit-title {
-    font-size: 15px;
-    font-weight: 600;
-  }
-  .note.editing textarea.edit-body {
-    font-size: 14px;
-    min-height: 60px;
-    line-height: 1.4;
-  }
-  .edit-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 4px;
-    margin-top: 8px;
-  }
-  .edit-actions button {
-    padding: 4px 12px;
-    font-size: 12px;
-    border-radius: 4px;
-  }
-  .edit-actions button.primary {
-    border: 1px solid var(--border);
-    color: var(--fg);
-    font-weight: 500;
-  }
-  /* ===== Auth ===== */
-  .auth-wrap {
-    max-width: 380px;
-    margin: 80px auto;
-    padding: 32px 28px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.06);
-    text-align: center;
-  }
-  .auth-wrap h2 {
-    margin: 0 0 8px;
-    font-size: 22px;
-    font-weight: 500;
-  }
-  .auth-wrap h2 span { color: var(--accent); }
-  .auth-wrap p {
-    margin: 0 0 20px;
-    color: var(--muted);
-    font-size: 13px;
-  }
-  .auth-wrap input[type="email"] {
-    width: 100%;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 14px;
-    font-family: inherit;
-    font-size: 14px;
-    outline: none;
-    margin-bottom: 12px;
-  }
-  .auth-wrap input[type="email"]:focus {
-    border-color: var(--accent);
-  }
-  .auth-wrap button {
-    width: 100%;
-    padding: 10px 14px;
-    font-weight: 500;
-    color: var(--fg);
-    border: 1px solid var(--border);
-  }
-  .auth-msg {
-    font-size: 12px;
-    margin-top: 14px;
-    color: var(--muted);
-    min-height: 16px;
-  }
-  .auth-msg.ok { color: #137333; }
-  .auth-msg.err { color: #c5221f; }
-  .user-pill {
-    font-size: 12px;
-    color: var(--muted);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .user-pill button {
-    padding: 4px 8px;
-    font-size: 12px;
-  }
-  /* Bootstrap-driven visibility (set synchronously before Supabase JS loads) */
-  html.unauth body header,
-  html.unauth body main { display: none; }
-  html.authed body #auth-screen { display: none; }
-  /* Hide everything by default until bootstrap class is set */
-  html:not(.authed):not(.unauth) #auth-screen,
-  html:not(.authed):not(.unauth) header,
-  html:not(.authed):not(.unauth) main { display: none; }
-</style>
+<link rel="stylesheet" href="/app.css" />
 </head>
 <body>
-  <div id="auth-screen" class="auth-wrap">
-    <h2>Ke<span>e</span>p</h2>
-    <p>Sign in with your email — we'll send you a one-tap login link.</p>
+
+<!-- ══ Sign in ══ -->
+<div id="auth-screen">
+  <div class="auth-card">
+    <div class="auth-logo"><span class="k">Ke</span><span class="e">e</span><span class="k">p</span></div>
+    <p>Sign in with your email and we'll send you a one-tap link. No password.</p>
     <form id="auth-form">
       <input id="email" type="email" placeholder="you@example.com" required autocomplete="email" />
-      <button class="primary" type="submit" id="auth-submit">Send login link</button>
+      <button type="submit" id="auth-submit">Send login link</button>
     </form>
     <div id="auth-msg" class="auth-msg"></div>
   </div>
-  <header>
-    <h1>Ke<span>e</span>p</h1>
-    <div class="search-wrap">
-      <input id="search" type="search" placeholder="Search notes…" />
+</div>
+
+<!-- ══ Top app bar ══ -->
+<header id="topbar">
+  <button class="icon-btn" id="menu-btn" title="Main menu" aria-label="Main menu"></button>
+  <div class="brand"><span class="mark"></span><span class="word">Keep</span></div>
+
+  <div class="search-shell">
+    <div class="search-box">
+      <button class="icon-btn search-ico" id="search-btn" tabindex="-1" aria-hidden="true"></button>
+      <input id="search" type="text" placeholder="Search" autocomplete="off" spellcheck="false" />
+      <button class="icon-btn search-clear" id="search-clear" hidden title="Clear search"></button>
     </div>
-    <div class="actions">
-      <span class="user-pill">
-        <span id="user-email"></span>
-        <button id="logout" title="Sign out">⎋</button>
-      </span>
-      <button class="primary" id="export">Send to Claude</button>
-    </div>
-  </header>
-  <main>
-    <div class="composer">
-      <input id="title" placeholder="Title" />
-      <textarea id="body" placeholder="Take a note..." rows="1" autofocus></textarea>
-      <div class="composer-actions">
-        <span class="composer-hint"><kbd>⌘</kbd>+<kbd>Enter</kbd> to save</span>
-        <button class="primary" id="add">Add</button>
+  </div>
+
+  <div class="bar-actions">
+    <button class="icon-btn" id="refresh-btn" title="Refresh"></button>
+    <button class="icon-btn" id="view-btn" title="Toggle list view"></button>
+    <button class="icon-btn" id="theme-btn" title="Toggle theme"></button>
+    <button class="icon-btn avatar" id="account-btn" title="Account"></button>
+  </div>
+</header>
+
+<!-- ══ Selection bar (replaces the top bar when notes are selected) ══ -->
+<div id="selbar" hidden>
+  <button class="icon-btn" id="sel-close" title="Clear selection"></button>
+  <span id="sel-count">0 selected</span>
+  <div class="bar-actions">
+    <button class="icon-btn" id="sel-pin" title="Pin"></button>
+    <button class="icon-btn" id="sel-color" title="Change color"></button>
+    <button class="icon-btn" id="sel-label" title="Labels"></button>
+    <button class="icon-btn" id="sel-archive" title="Archive"></button>
+    <button class="icon-btn" id="sel-delete" title="Delete"></button>
+  </div>
+</div>
+
+<!-- ══ Navigation drawer ══ -->
+<div id="scrim"></div>
+<nav id="sidebar" aria-label="Views"><div id="nav-list"></div></nav>
+
+<!-- ══ Notes ══ -->
+<main id="main">
+  <div id="composer-wrap">
+    <div id="composer" class="collapsed">
+      <div class="cmp-collapsed">
+        <input id="cmp-stub" placeholder="Take a note…" readonly />
+        <div class="cmp-stub-actions">
+          <button class="icon-btn" id="cmp-new-list" title="New list"></button>
+        </div>
+      </div>
+      <div class="cmp-open">
+        <input id="cmp-title" placeholder="Title" />
+        <textarea id="cmp-body" placeholder="Take a note…" rows="1"></textarea>
+        <ul id="cmp-list" class="checklist edit" hidden></ul>
+        <div id="cmp-labels" class="chips"></div>
+        <div class="cmp-actions">
+          <div class="left">
+            <button class="icon-btn" data-cmp="color" title="Background options"></button>
+            <button class="icon-btn" data-cmp="label" title="Add label"></button>
+            <button class="icon-btn" data-cmp="check" title="Show checkboxes"></button>
+            <button class="icon-btn" data-cmp="pin" title="Pin note"></button>
+          </div>
+          <button class="text-btn" data-cmp="close">Close</button>
+        </div>
       </div>
     </div>
-    <div class="toolbar">
-      <span id="count">…</span>
-      <label><input type="checkbox" id="show-archived" /> Show archived</label>
+  </div>
+
+  <section class="grid-section" id="sec-pinned" hidden>
+    <h2 class="section-label">Pinned</h2>
+    <div class="grid" id="grid-pinned"></div>
+  </section>
+
+  <section class="grid-section" id="sec-others">
+    <h2 class="section-label" id="others-label" hidden>Others</h2>
+    <div class="grid" id="grid-others"></div>
+  </section>
+
+  <div id="sentinel"></div>
+  <div id="empty" hidden></div>
+  <div id="trash-note" hidden>
+    <span>Notes in Trash stay here until you delete them.</span>
+    <button class="text-btn danger" id="empty-trash">Empty Trash</button>
+  </div>
+</main>
+
+<!-- ══ Note editor ══ -->
+<div id="editor-scrim" hidden>
+  <div id="editor" role="dialog" aria-modal="true" aria-label="Edit note">
+    <button class="pin-btn" id="ed-pin" title="Pin note"></button>
+    <input id="ed-title" placeholder="Title" />
+    <textarea id="ed-body" placeholder="Take a note…" rows="1"></textarea>
+    <ul id="ed-list" class="checklist edit" hidden></ul>
+    <div id="ed-labels" class="chips"></div>
+    <div id="ed-meta"></div>
+    <div class="ed-actions">
+      <div class="left">
+        <button class="icon-btn" data-ed="color" title="Background options"></button>
+        <button class="icon-btn" data-ed="label" title="Add label"></button>
+        <button class="icon-btn" data-ed="check" title="Show checkboxes"></button>
+        <button class="icon-btn" data-ed="archive" title="Archive"></button>
+        <button class="icon-btn" data-ed="more" title="More"></button>
+      </div>
+      <button class="text-btn" data-ed="close">Close</button>
     </div>
-    <div id="notes" class="list"></div>
-    <div class="load-more">
-      <button id="load-more" hidden>Load more</button>
-    </div>
-    <div id="empty" class="empty" hidden>No notes.</div>
-  </main>
-  <div class="toast" id="toast"></div>
+  </div>
+</div>
 
-<script type="module">
-  import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+<!-- ══ Floating layers ══ -->
+<div id="popover" hidden></div>
+<div id="snackbar" hidden><span id="snack-text"></span><button id="snack-action" class="text-btn"></button></div>
+<div id="fab" hidden></div>
+<div id="shortcuts" hidden></div>
+<div id="sync-pill" hidden></div>
 
-  const SUPABASE_URL = "https://sywglobxvtxayvelhunb.supabase.co";
-  const SUPABASE_KEY = "sb_publishable_92UpBhuxnldvBH5hXGiy7Q_voxEzcsc";
-  const PAGE_SIZE = 30;
-
-  const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-  // Auth state — set after sign-in
-  let USER_ID = null;
-  let USER_EMAIL = null;
-
-  // === Cache (stale-while-revalidate) ===
-  // Render last seen page from localStorage instantly on load,
-  // then refresh from server in the background.
-  const cacheKey = () => `keep_cache_${USER_ID}_${state?.archived ? "1" : "0"}`;
-  const saveCache = (rows, total) => {
-    if (!USER_ID) return;
-    try { localStorage.setItem(cacheKey(), JSON.stringify({ rows, total, t: Date.now() })); } catch {}
-  };
-  const loadCache = () => {
-    if (!USER_ID) return null;
-    try { return JSON.parse(localStorage.getItem(cacheKey()) || "null"); } catch { return null; }
-  };
-
-  // === Storage layer ===
-  // RLS enforces user_id = auth.uid() server-side, so we don't need to
-  // .eq() on user_id for security — but doing so still benefits the index.
-  const store = {
-    async list({ search = "", archived = false, offset = 0, limit = PAGE_SIZE } = {}) {
-      // For unfiltered queries, use Postgres planner estimate (instant).
-      // For search, skip count entirely — we'll show "Load more" if rows
-      // arrive at full page size and let the user paginate.
-      const useCount = !search.trim();
-      let q = supabase
-        .from("notes")
-        .select("*", useCount ? { count: "estimated" } : {})
-        .eq("user_id", USER_ID);
-      if (!archived) q = q.eq("archived", false);
-      if (search.trim()) {
-        const s = search.trim().replace(/[%,]/g, " ");
-        q = q.or(`title.ilike.%${s}%,body.ilike.%${s}%`);
-      }
-      q = q
-        .order("pinned", { ascending: false })
-        .order("created_at", { ascending: false })
-        .range(offset, offset + limit - 1);
-      const { data, error, count } = await q;
-      if (error) {
-        console.error(error);
-        toast("Failed to load notes");
-        return { rows: [], total: 0, estimated: false };
-      }
-      return {
-        rows: data,
-        total: useCount ? (count ?? data.length) : data.length,
-        estimated: useCount,
-      };
-    },
-    async add({ title, body }) {
-      const { data, error } = await supabase
-        .from("notes")
-        .insert({ user_id: USER_ID, title, body })
-        .select()
-        .single();
-      if (error) {
-        console.error(error);
-        toast("Failed to save note");
-        return null;
-      }
-      return data;
-    },
-    async update(id, fields) {
-      const { error } = await supabase
-        .from("notes")
-        .update({ ...fields, updated_at: new Date().toISOString() })
-        .eq("id", id);
-      if (error) {
-        console.error(error);
-        toast("Failed to save changes");
-        return false;
-      }
-      return true;
-    },
-    async remove(id) {
-      const { error } = await supabase.from("notes").delete().eq("id", id);
-      if (error) {
-        console.error(error);
-        toast("Failed to delete note");
-      }
-    },
-  };
-
-  // === DOM ===
-  const titleEl = document.getElementById("title");
-  const bodyEl = document.getElementById("body");
-  const addBtn = document.getElementById("add");
-  const exportBtn = document.getElementById("export");
-  const searchEl = document.getElementById("search");
-  const archivedEl = document.getElementById("show-archived");
-  const notesEl = document.getElementById("notes");
-  const emptyEl = document.getElementById("empty");
-  const countEl = document.getElementById("count");
-  const loadMoreBtn = document.getElementById("load-more");
-  const toastEl = document.getElementById("toast");
-
-  // === State ===
-  const state = { search: "", archived: false, offset: 0, total: 0 };
-
-  const autoGrow = (el) => {
-    el.style.height = "auto";
-    el.style.height = el.scrollHeight + "px";
-  };
-  bodyEl.addEventListener("input", () => autoGrow(bodyEl));
-
-  const toast = (msg) => {
-    toastEl.textContent = msg;
-    toastEl.classList.add("show");
-    setTimeout(() => toastEl.classList.remove("show"), 1800);
-  };
-
-  const fmtDate = (iso) => {
-    const d = new Date(iso);
-    const now = new Date();
-    const sameYear = d.getFullYear() === now.getFullYear();
-    return d.toLocaleString(undefined, {
-      year: sameYear ? undefined : "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
-  const renderNote = (n) => {
-    const card = document.createElement("article");
-    card.className = "note";
-    if (n.archived) card.classList.add("archived");
-    if (n.pinned) card.classList.add("pinned");
-
-    if (n.title) {
-      const h = document.createElement("h2");
-      h.textContent = n.title;
-      card.appendChild(h);
-    }
-    if (n.body) {
-      const p = document.createElement("p");
-      p.textContent = n.body;
-      card.appendChild(p);
-    }
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    const date = document.createElement("span");
-    date.textContent = fmtDate(n.created_at);
-    meta.appendChild(date);
-    for (const label of n.labels || []) {
-      const chip = document.createElement("span");
-      chip.className = "chip";
-      chip.textContent = label;
-      meta.appendChild(chip);
-    }
-    if (n.source_url) {
-      const a = document.createElement("a");
-      a.className = "source";
-      a.href = n.source_url;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      try {
-        a.textContent = new URL(n.source_url).hostname.replace(/^www\./, "");
-      } catch {
-        a.textContent = n.source_url;
-      }
-      meta.appendChild(a);
-    }
-    card.appendChild(meta);
-
-    const del = document.createElement("button");
-    del.className = "delete";
-    del.textContent = "✕";
-    del.setAttribute("aria-label", "Delete note");
-    del.onclick = async (e) => {
-      e.stopPropagation();
-      if (!confirm("Delete this note?")) return;
-      await store.remove(n.id);
-      await refresh();
-    };
-    card.appendChild(del);
-
-    // Click anywhere on the card → edit (except links and delete button)
-    card.addEventListener("click", (e) => {
-      if (e.target.closest("a, .delete, .edit-actions")) return;
-      enterEditMode(card, n);
-    });
-    return card;
-  };
-
-  // Inline edit: replace the card's content with title/body inputs.
-  const enterEditMode = (card, n) => {
-    if (card.classList.contains("editing")) return;
-    card.classList.add("editing");
-    card.innerHTML = "";
-
-    const titleInput = document.createElement("input");
-    titleInput.className = "edit-title";
-    titleInput.placeholder = "Title";
-    titleInput.value = n.title || "";
-    card.appendChild(titleInput);
-
-    const bodyArea = document.createElement("textarea");
-    bodyArea.className = "edit-body";
-    bodyArea.placeholder = "Note…";
-    bodyArea.value = n.body || "";
-    card.appendChild(bodyArea);
-
-    // Auto-grow textarea
-    const grow = () => {
-      bodyArea.style.height = "auto";
-      bodyArea.style.height = bodyArea.scrollHeight + "px";
-    };
-    bodyArea.addEventListener("input", grow);
-
-    const actions = document.createElement("div");
-    actions.className = "edit-actions";
-    const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "Cancel";
-    const saveBtn = document.createElement("button");
-    saveBtn.className = "primary";
-    saveBtn.textContent = "Save";
-    actions.appendChild(cancelBtn);
-    actions.appendChild(saveBtn);
-    card.appendChild(actions);
-
-    const exitWithoutChange = () => {
-      const fresh = renderNote(n);
-      card.replaceWith(fresh);
-    };
-
-    const commit = async () => {
-      const newTitle = titleInput.value.trim();
-      const newBody = bodyArea.value.trim();
-      const oldTitle = (n.title || "").trim();
-      const oldBody = (n.body || "").trim();
-      if (newTitle === oldTitle && newBody === oldBody) {
-        exitWithoutChange();
-        return;
-      }
-      saveBtn.disabled = true;
-      const ok = await store.update(n.id, { title: newTitle, body: newBody });
-      saveBtn.disabled = false;
-      if (ok) {
-        n.title = newTitle;
-        n.body = newBody;
-        n.updated_at = new Date().toISOString();
-        const fresh = renderNote(n);
-        card.replaceWith(fresh);
-        // Update cache so the next reload shows the new content
-        invalidateCache();
-      }
-    };
-
-    cancelBtn.onclick = (e) => { e.stopPropagation(); exitWithoutChange(); };
-    saveBtn.onclick = (e) => { e.stopPropagation(); commit(); };
-
-    const onKey = (e) => {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commit(); }
-      else if (e.key === "Escape") { e.preventDefault(); exitWithoutChange(); }
-    };
-    titleInput.addEventListener("keydown", onKey);
-    bodyArea.addEventListener("keydown", onKey);
-
-    // Focus body, place cursor at end
-    setTimeout(() => {
-      bodyArea.focus();
-      bodyArea.setSelectionRange(bodyArea.value.length, bodyArea.value.length);
-      grow();
-    }, 0);
-  };
-
-  const invalidateCache = () => {
-    if (USER_ID) try { localStorage.removeItem(cacheKey()); } catch {}
-  };
-
-  const setCount = () => {
-    const shown = notesEl.children.length;
-    if (state.search) {
-      countEl.textContent = `${shown} match${shown === 1 ? "" : "es"}`;
-    } else if (state.total === 0) {
-      countEl.textContent = "0 notes";
-    } else {
-      // Estimated count from Postgres planner — show with ~ to be honest
-      countEl.textContent = `Showing ${shown} of ~${state.total}`;
-    }
-  };
-
-  // Load a page; if append=false, replace the list
-  const loadPage = async ({ append }) => {
-    const { rows, total } = await store.list({
-      search: state.search,
-      archived: state.archived,
-      offset: state.offset,
-      limit: PAGE_SIZE,
-    });
-    state.total = total;
-    if (!append) notesEl.innerHTML = "";
-    for (const n of rows) notesEl.appendChild(renderNote(n));
-    emptyEl.hidden = state.total > 0 || notesEl.children.length > 0;
-    // For search (no count), use rows.length as a hint
-    loadMoreBtn.hidden = state.search
-      ? rows.length < PAGE_SIZE
-      : notesEl.children.length >= state.total;
-    setCount();
-    // Cache only the unfiltered first page
-    if (!append && !state.search && state.offset === 0) {
-      saveCache(rows, total);
-    }
-  };
-
-  // Refresh from offset 0 (e.g. after add/delete/search/filter change)
-  const refresh = async () => {
-    state.offset = 0;
-    await loadPage({ append: false });
-  };
-
-  // Render cached notes immediately (no network) — called on auth-ready.
-  const renderFromCache = () => {
-    const cached = loadCache();
-    if (!cached || !cached.rows || !cached.rows.length) return false;
-    state.total = cached.total;
-    state.offset = 0;
-    notesEl.innerHTML = "";
-    for (const n of cached.rows) notesEl.appendChild(renderNote(n));
-    emptyEl.hidden = true;
-    loadMoreBtn.hidden = cached.rows.length >= cached.total;
-    setCount();
-    return true;
-  };
-
-  loadMoreBtn.onclick = async () => {
-    state.offset += PAGE_SIZE;
-    await loadPage({ append: true });
-  };
-
-  const add = async () => {
-    const title = titleEl.value.trim();
-    const body = bodyEl.value.trim();
-    if (!title && !body) return;
-    await store.add({ title, body });
-    titleEl.value = "";
-    bodyEl.value = "";
-    autoGrow(bodyEl);
-    await refresh();
-  };
-
-  const sendToClaude = async () => {
-    try {
-      await navigator.clipboard.writeText("/keep-to-csv");
-      toast(`Open Claude Desktop → /keep-to-csv (copied)`);
-    } catch {
-      toast(`Open Claude Desktop and run /keep-to-csv`);
-    }
-  };
-
-  // Debounced search
-  let searchTimer = null;
-  searchEl.addEventListener("input", () => {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => {
-      state.search = searchEl.value;
-      refresh();
-    }, 200);
-  });
-
-  archivedEl.addEventListener("change", () => {
-    state.archived = archivedEl.checked;
-    refresh();
-  });
-
-  addBtn.onclick = add;
-  exportBtn.onclick = sendToClaude;
-  bodyEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) add();
-  });
-  titleEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      bodyEl.focus();
-    }
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    const t = e.target;
-    if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
-    if (e.key === "n") {
-      e.preventDefault();
-      bodyEl.focus();
-    } else if (e.key === "/") {
-      e.preventDefault();
-      searchEl.focus();
-    }
-  });
-
-  // === Auth ===
-  const authForm = document.getElementById("auth-form");
-  const emailInput = document.getElementById("email");
-  const authSubmit = document.getElementById("auth-submit");
-  const authMsg = document.getElementById("auth-msg");
-  const userEmailEl = document.getElementById("user-email");
-  const logoutBtn = document.getElementById("logout");
-
-  const setAuthMsg = (text, kind = "") => {
-    authMsg.textContent = text;
-    authMsg.className = "auth-msg " + kind;
-  };
-
-  authForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const email = emailInput.value.trim();
-    if (!email) return;
-    authSubmit.disabled = true;
-    setAuthMsg("Sending…");
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: location.origin + "/" },
-    });
-    authSubmit.disabled = false;
-    if (error) {
-      setAuthMsg(error.message, "err");
-    } else {
-      setAuthMsg(`Check ${email} — click the link to sign in.`, "ok");
-    }
-  });
-
-  logoutBtn.addEventListener("click", async () => {
-    await supabase.auth.signOut();
-    showAuth();
-  });
-
-  const showAuth = () => {
-    USER_ID = null;
-    USER_EMAIL = null;
-    document.documentElement.classList.remove("authed");
-    document.documentElement.classList.add("unauth");
-    notesEl.innerHTML = "";
-  };
-
-  const showMain = (user) => {
-    USER_ID = user.id;
-    USER_EMAIL = user.email;
-    userEmailEl.textContent = USER_EMAIL;
-    document.documentElement.classList.remove("unauth");
-    document.documentElement.classList.add("authed");
-
-    // Share-target deep link
-    const params = new URLSearchParams(location.search);
-    const sharedText = params.get("text") || params.get("body");
-    const sharedTitle = params.get("title");
-    if (sharedText || sharedTitle) {
-      if (sharedTitle) titleEl.value = sharedTitle;
-      if (sharedText) {
-        bodyEl.value = sharedText;
-        autoGrow(bodyEl);
-      }
-      history.replaceState({}, "", location.pathname);
-    }
-    bodyEl.focus();
-  };
-
-  // === Synchronous bootstrap path ===
-  // The inline <script> in <head> already set <html class="authed"> or "unauth"
-  // and stashed the user on window.__BOOT_USER. Render cache + show UI now.
-  const BOOT = window.__BOOT_USER;
-  if (BOOT) {
-    showMain(BOOT);
-    renderFromCache(); // instant paint from localStorage if available
-  }
-
-  const onSession = async (session) => {
-    if (session && session.user) {
-      const wasSameUser = USER_ID === session.user.id;
-      showMain(session.user);
-      if (wasSameUser) {
-        refresh().catch(console.error); // background refresh, UI already up
-      } else {
-        await refresh();
-      }
-    } else {
-      showAuth();
-    }
-  };
-
-  // Validate the session async (might refresh tokens, log out if expired).
-  // Don't await before the user can interact — bootstrap already showed UI.
-  supabase.auth.getSession().then(({ data: { session } }) => onSession(session));
-
-  // React to sign-in/out events
-  supabase.auth.onAuthStateChange((_event, session) => {
-    onSession(session);
-  });
-
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
-  }
-</script>
+<script type="module" src="/app.js"></script>
 </body>
 </html>
