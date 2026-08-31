@@ -121,7 +121,7 @@ const state = {
   limit: PAGE,
   layout: document.documentElement.classList.contains("list-view") ? "list" : "grid",
   theme: localStorage.getItem("keep_theme") || "system",
-  navOpen: window.innerWidth >= 1200,
+  navOpen: document.documentElement.classList.contains("nav-open"),
   syncing: false,
   syncError: false,
 };
@@ -441,8 +441,16 @@ function render() {
   D.sentinel.style.height = "1px";
   D.sentinel.dataset.more = list.length > shown.length ? "1" : "";
 
-  relayout();
+  // Synchronous, deliberately: deferring this to a rAF leaves one frame where
+  // the cards are in the DOM but still stacked at the grid origin at their
+  // shrink-to-fit widths, which is visible as a flash of jumbled cards.
+  layoutNow();
   renderNav();
+  maybeLoadMore();
+
+  if (document.documentElement.classList.contains("booting")) {
+    raf(() => raf(() => document.documentElement.classList.remove("booting")));
+  }
 }
 
 function fillGrid(grid, list) {
@@ -587,6 +595,12 @@ function layoutGrid(grid) {
   grid.style.height = Math.max(...colH) + "px";
   // keep the section heading aligned with the first column
   grid.parentElement?.style.setProperty("--pad", offset + "px");
+  grid.classList.add("laid-out");
+}
+
+function layoutNow() {
+  layoutGrid(D.gridPinned);
+  layoutGrid(D.gridOthers);
 }
 
 let layoutQueued = false;
@@ -595,8 +609,7 @@ function relayout() {
   layoutQueued = true;
   raf(() => {
     layoutQueued = false;
-    layoutGrid(D.gridPinned);
-    layoutGrid(D.gridOthers);
+    layoutNow();
     maybeLoadMore();
   });
 }
@@ -1123,7 +1136,8 @@ function go(view, label = null) {
 
 const setNav = (open) => {
   state.navOpen = open;
-  document.body.classList.toggle("nav-open", open);
+  document.documentElement.classList.toggle("nav-open", open);
+  try { localStorage.setItem("keep_nav", open ? "1" : "0"); } catch {}
   relayout();
 };
 

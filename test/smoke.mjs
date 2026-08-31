@@ -320,12 +320,46 @@ labelled.nav.includes("Errands") && labelled.chip
 
 /* ── 12. reload: cache repaints everything without the network ──────── */
 await evaluate(`await window.__keep.settle(); return true;`);
+
+// Sample card geometry every frame across the next load. Catches the class of
+// bug where cards are in the DOM but not yet placed by the masonry, which
+// paints them stacked at the grid origin at shrink-to-fit widths.
+await send("Page.addScriptToEvaluateOnNewDocument", {
+  source: `window.__fr = [];
+    (function () {
+      let n = 0;
+      (function loop() {
+        const els = document.querySelectorAll(".note");
+        if (els.length) {
+          const rs = [...els].map(e => { const b = e.getBoundingClientRect();
+            return [Math.round(b.left), Math.round(b.top), Math.round(b.width)]; });
+          window.__fr.push({
+            placed: els[0].style.transform !== "",
+            lefts: new Set(rs.map(r => r[0])).size,
+            widths: new Set(rs.map(r => r[2])).size,
+            n: rs.length,
+          });
+        }
+        if (++n < 40) requestAnimationFrame(loop);
+      })();
+    })();`,
+});
 await load();
 await sleep(600);
 const afterReload = await evaluate(`return window.__keep.count();`);
 afterReload === 6
   ? ok("notes survive a reload from the local cache")
   : bad("notes survive a reload from the local cache", `count ${afterReload}, expected 6`);
+
+/* ── 12b. no unpositioned frame during that load ───────────────────── */
+const frames = await evaluate(`return window.__fr || [];`);
+const unplaced = frames.filter((f) => f.n > 1 && (!f.placed || f.lefts === 1));
+frames.length === 0
+  ? bad("no unpositioned frame while loading", "sampler recorded nothing")
+  : unplaced.length === 0
+    ? ok(`no unpositioned frame while loading (${frames.length} frames sampled)`)
+    : bad("no unpositioned frame while loading",
+          `${unplaced.length} frame(s) painted cards before layout, e.g. ${JSON.stringify(unplaced[0])}`);
 
 /* ── 13. search finds them ─────────────────────────────────────────── */
 await evaluate(`

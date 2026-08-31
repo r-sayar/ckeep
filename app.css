@@ -93,6 +93,17 @@ html, body { margin: 0; padding: 0; height: 100%; }
    [hidden] { display: none } rule. Restore it once, globally. */
 [hidden] { display: none !important; }
 
+/* No transition may run on the very first paint — otherwise the drawer and
+   the cards animate in from wherever they happened to start. */
+html.booting *, html.booting *::before, html.booting *::after {
+  transition: none !important;
+  animation: none !important;
+}
+
+/* A card is not painted until the masonry has positioned it. visibility keeps
+   the element measurable, which the layout pass depends on. */
+.grid:not(.laid-out) .note { visibility: hidden; }
+
 body {
   font-family: Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   background: var(--bg);
@@ -246,7 +257,7 @@ body.has-selection #topbar { display: none; }
   transform: translateX(calc(-1 * var(--nav-w)));
   transition: transform .22s var(--ease);
 }
-body.nav-open #sidebar { transform: none; }
+.nav-open #sidebar { transform: none; }
 #scrim {
   position: fixed; inset: 0; background: var(--scrim);
   opacity: 0; pointer-events: none; z-index: 24;
@@ -277,10 +288,10 @@ body.nav-open #sidebar { transform: none; }
   max-width: 1600px;
 }
 @media (min-width: 900px) {
-  body.nav-open #main { margin-left: var(--nav-w); }
+  .nav-open #main { margin-left: var(--nav-w); }
 }
 @media (max-width: 899px) {
-  body.nav-open #scrim { opacity: 1; pointer-events: auto; }
+  .nav-open #scrim { opacity: 1; pointer-events: auto; }
 }
 
 /* ══ Composer ══════════════════════════════════════════════════ */

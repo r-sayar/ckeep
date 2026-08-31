@@ -32,6 +32,20 @@
       if (v === "list") H.classList.add("list-view");
     } catch (e) {}
 
+    // Resolve the nav drawer here, not in JS. Deciding it later means <main>
+    // animates its margin open on every load, and the grid gets laid out at a
+    // width that is still moving.
+    try {
+      var nav = localStorage.getItem("keep_nav");
+      if (nav === null) nav = window.innerWidth >= 1200 ? "1" : "0";
+      if (nav === "1") H.classList.add("nav-open");
+    } catch (e) {
+      if (window.innerWidth >= 1200) H.classList.add("nav-open");
+    }
+
+    // Suppress every transition until after the first laid-out paint.
+    H.classList.add("booting");
+
     try {
       var raw = localStorage.getItem("sb-sywglobxvtxayvelhunb-auth-token");
       if (raw && raw.indexOf("base64-") === 0) {
