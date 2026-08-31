@@ -18,7 +18,11 @@ Pulls the user's notes from Supabase (the Keep web app's backend) and writes the
 
 ## Process
 
-1. **Fetch** all notes (newest first):
+> Notes the user deleted live in Trash, flagged by a reserved `_ck:trash`
+> entry in `labels`. Both queries below exclude them — a CSV export shouldn't
+> quietly resurrect deleted notes.
+
+1. **Fetch** all live notes (newest first):
 
    **Preferred (via Supabase MCP):**
    ```
@@ -26,6 +30,7 @@ Pulls the user's notes from Supabase (the Keep web app's backend) and writes the
      select id, created_at, title, body
      from public.notes
      where archived = false
+       and not (labels @> array['_ck:trash'])
      order by created_at desc
    ")
    ```
@@ -34,7 +39,7 @@ Pulls the user's notes from Supabase (the Keep web app's backend) and writes the
    ```bash
    KEY=$(cat ~/.config/keep/service_key)
    curl -s \
-     "https://sywglobxvtxayvelhunb.supabase.co/rest/v1/notes?select=id,created_at,title,body&archived=eq.false&order=created_at.desc" \
+     "https://sywglobxvtxayvelhunb.supabase.co/rest/v1/notes?select=id,created_at,title,body&archived=eq.false&labels=not.cs.%7B_ck%3Atrash%7D&order=created_at.desc" \
      -H "apikey: $KEY" \
      -H "Authorization: Bearer $KEY"
    ```

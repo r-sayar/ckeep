@@ -10,21 +10,41 @@ A minimal, fast note-taking PWA backed by Supabase. Installable on desktop and A
 
 ## Features
 
-- **Email magic-link login** (Supabase Auth) — multi-user, RLS-enforced; each user only sees their own notes
-- **List view** with composer at top, newest-first
-- **Auto-focus** the note field on open — start typing immediately
-- **Search** with server-side `ILIKE` over title + body, backed by a pg_trgm trigram index (instant on 4000+ notes)
-- **Pagination** (50/page, "Load more" button)
-- **Archive toggle** (hidden by default)
-- **Pinned notes first**, then newest
-- **Labels** rendered as chips, **source URLs** as small links
-- **Keyboard shortcuts**: `n` focuses composer, `/` focuses search, `⌘/Ctrl+Enter` saves
-- **PWA**: installable on iOS, Android, macOS, Windows; works offline (read cache)
-- **Web Share Target**: Android share sheet → Keep creates a prefilled note
-- **App shortcut**: long-press home-screen icon → "New note" jumps to composer
-- **Google Keep import**: bulk-import from a Google Takeout zip (4000+ notes, idempotent re-import)
-- **Image attachments**: from a Keep takeout, copied to a local folder; each affected note gets a footer line pointing to the on-disk path
-- **CSV export via Claude**: a custom skill (`/keep-to-csv`) that fetches notes from Supabase and writes a CSV to `~/Downloads/`
+**It never waits for the network.** Every action — typing a note, ticking a
+checkbox, changing a colour — is applied to an in-memory model and painted on
+the next frame. A background outbox pushes the change to Supabase and retries
+until it lands. Close the tab mid-sync, go through a tunnel, lose your
+connection entirely: the queue is on disk and resumes where it left off.
+
+### Notes
+- **Masonry grid** of cards that reflow with an animated transition, plus a one-key list view
+- **Pinned / Others** sections
+- **Twelve note colours** (Google Keep's exact palette, in both light and dark)
+- **Checklists** — `[ ]` / `[x]` lines in the body become real checkboxes; ticked
+  items strike through and sink to the bottom. This is the same format
+  `import_takeout.py` writes, so imported Keep checklists light up automatically
+- **Labels** — create, assign, rename, delete; chips on cards, filters in the sidebar
+- **Archive** and **Trash** with restore and *Empty Trash*
+- **Undo** on every destructive action, via a snackbar
+- **Multi-select** — bulk pin, colour, label, archive and delete
+- **Inline editor** that expands out of the card it came from and folds back into it
+
+### Getting around
+- **Instant search** over titles, bodies and labels — client-side, so it filters as you type
+- **Keyboard**: `c`/`n` new note · `l` new list · `/` search · `g` grid/list ·
+  `m` menu · `Esc` close · `⌘/Ctrl+Enter` save · `?` shortcuts
+- **Dark mode**, following the system by default, toggleable, and applied before first paint
+- **Rendering is incremental** — thousands of notes stay in memory, but only what's
+  near the viewport is in the DOM
+
+### Platform
+- **Email magic-link login** (Supabase Auth), multi-user, RLS-enforced
+- **PWA** — installable on iOS, Android, macOS and Windows; fully usable offline
+- **Web Share Target** — share into Keep from the Android share sheet
+- **App shortcuts** — long-press the icon for *New note* or *New list*
+- **Cross-device sync** over Supabase realtime when it's enabled
+- **Google Keep import** from a Takeout zip (idempotent, 4000+ notes)
+- **CSV export via Claude** with the `/keep-to-csv` skill
 
 ---
 
@@ -32,10 +52,12 @@ A minimal, fast note-taking PWA backed by Supabase. Installable on desktop and A
 
 | Layer | Choice |
 |---|---|
-| Frontend | Single `index.html`, vanilla JS (no build step), Supabase JS client via ESM CDN |
+| Frontend | `index.html` + `app.css` + `app.js`, vanilla JS modules, no build step |
+| Data | In-memory model, IndexedDB cache, outbox queue; Supabase JS via ESM CDN |
 | DB | Supabase (Postgres + REST + RLS + pg_trgm) |
 | Hosting | Vercel (static) |
 | Mobile | PWA — Add to Home Screen, or wrap to APK via [PWABuilder.com](https://www.pwabuilder.com) |
+| Tests | `node test/smoke.mjs` — drives real Chrome over CDP, no dependencies |
 | Claude integration | Skill (`SKILL.md`) installable into Claude Desktop or Claude Code |
 
 ---
@@ -91,7 +113,7 @@ A minimal, fast note-taking PWA backed by Supabase. Installable on desktop and A
    - **Redirect URLs**: add `https://YOUR_APP.vercel.app/**`
    - For local dev also add `http://localhost:8766/**`
 
-5. In `index.html`, replace the two constants near the top of `<script type="module">`:
+5. In `app.js`, replace the two constants near the top:
 
    ```js
    const SUPABASE_URL = "https://YOUR_PROJECT.supabase.co";
@@ -181,30 +203,66 @@ What gets imported:
 ## Architecture
 
 ```
-┌─────────────┐     PostgREST      ┌──────────────────┐
-│  index.html │ ◄────────────────► │ Supabase Postgres│
-│  (browser)  │                    │  + pg_trgm + RLS │
-└─────────────┘                    └──────────────────┘
-       ▲                                    ▲
-       │                                    │
-   Add to Home                              │
-   Screen / PWA                          curl/REST
-       │                                    │
-       │                           ┌────────┴─────────┐
-   Android / iOS                   │ /keep-to-csv     │
-   / macOS                         │ skill (Claude    │
-                                   │ Desktop or Code) │
-                                   └──────────────────┘
-                                            ▲
-                                            │
-                            python3 import_takeout.py
-                            (one-shot bulk import from
-                             Google Keep takeout)
+      ┌──────────────────────── browser ────────────────────────┐
+      │                                                          │
+  interaction ──▶ in-memory notes ──▶ render (masonry, ~1 frame)  │
+                        │                                         │
+                        ├──▶ IndexedDB cache   (instant next open) │
+                        └──▶ outbox queue ──┐                      │
+      └───────────────────────────────────┼──────────────────────┘
+                                          │  retries, batched,
+                                          ▼  survives reloads
+                                 ┌──────────────────┐
+                                 │ Supabase Postgres│
+                                 │  + pg_trgm + RLS │
+                                 └──────────────────┘
+                                          ▲
+                                   curl / REST
+                                          │
+                            ┌─────────────┴──────────────┐
+                            │ /keep-to-csv skill         │
+                            │ import_takeout.py          │
+                            └────────────────────────────┘
 ```
 
+The interaction path and the network path are deliberately separate. Nothing the
+user does blocks on a request, and a failed request can't lose data — the note is
+already in memory and on disk, and the outbox keeps retrying.
+
+**Reads.** On open, the IndexedDB cache paints first; a full pull then reconciles
+against the server. The pull only prunes local notes the server didn't return
+when no write was confirmed while it was in flight — otherwise a note written
+seconds earlier could be deleted purely because of timing.
+
+**Writes.** Each changed note is queued by id as an upsert or a delete, so
+repeated edits coalesce into one request. IDs are generated client-side, which is
+what lets a brand-new note be edited, pinned or deleted before it has ever
+reached the server.
+
+**Trash** is a reserved `_ck:trash` label rather than a column, so it needs no
+migration. Labels under the `_ck:` namespace are hidden from the UI everywhere.
+
 - All client traffic goes browser → Supabase REST. No backend server, no Vercel functions.
-- The `/keep-to-csv` skill is a markdown file describing the procedure; Claude executes it (curl + Python) at invocation time.
-- The publishable key is shipped in the HTML; Row Level Security restricts it to rows where `user_id='default'`. To go multi-user, add Supabase Auth and replace the policy with `auth.uid()::text = user_id`.
+- The publishable key is shipped in the HTML; Row Level Security restricts each
+  user to rows where `auth.uid()::text = user_id`.
+
+---
+
+## Tests
+
+```bash
+node test/smoke.mjs
+```
+
+Boots the real app in headless Chrome, injects a session that is valid locally but
+rejected by the server, and drives it through fifteen checks — adding notes back
+to back, adding while a search filter is active, masonry overlap, pin, editor
+round-trip, checklist toggling, trash, labels, and survival across a reload. The
+rejected session is the point: it exercises every local-first path while sync is
+failing, which is where notes used to go missing.
+
+No test framework and no `npm install` — it talks to Chrome over the DevTools
+protocol directly.
 
 ---
 
@@ -212,13 +270,16 @@ What gets imported:
 
 | File | Purpose |
 |---|---|
-| `index.html` | The whole web app — UI, Supabase client, search, pagination, share-target |
+| `index.html` | Markup shell + the synchronous theme/auth bootstrap that prevents any flash |
+| `app.css` | All styling — Keep's palette, both themes, masonry cards, editor, popovers |
+| `app.js` | The app — local-first store, outbox sync, masonry layout, editor, checklists |
+| `sw.js` | Service worker — network-first shell so deploys land, cache-first assets |
 | `manifest.json` | PWA manifest (icons, install metadata, share_target, app shortcuts) |
 | `icon.svg` | App icon (also used as maskable) |
-| `sw.js` | Service worker — offline cache, makes the app installable |
 | `vercel.json` | Vercel deploy config (cleanUrls, SW headers) |
+| `test/smoke.mjs` | End-to-end browser test over the Chrome DevTools protocol |
 | `import_takeout.py` | One-shot bulk import from Google Keep takeout (idempotent upsert) |
-| `skill/keep-to-csv/SKILL.md` | Claude Desktop / Claude Code skill — fetch notes from Supabase, write CSV |
+| `skill/keep-to-csv/SKILL.md` | Claude skill — fetch notes from Supabase, write CSV |
 
 ---
 
@@ -226,16 +287,17 @@ What gets imported:
 
 - [x] List view, composer, delete
 - [x] Supabase persistence + RLS
-- [x] PWA installable
-- [x] Vercel deploy
+- [x] PWA installable, Vercel deploy
 - [x] CSV export via Claude skill
-- [x] Search, pagination, archive toggle
-- [x] Google Keep takeout import
-- [x] Attachment path footers
+- [x] Search, archive, Google Keep takeout import
 - [x] Multi-user (Supabase Auth magic link + per-user RLS)
-- [ ] Image attachments uploaded to Supabase Storage instead of local-disk references
-- [ ] Inline edit + reorder
-- [ ] Color tagging UI
+- [x] Local-first writes — optimistic UI, offline outbox, retry
+- [x] Masonry grid, note colours, labels, trash, undo, multi-select
+- [x] Checklists, dark mode, keyboard shortcuts, inline editor
+- [ ] Reminders
+- [ ] Collaborators
+- [ ] Drag to reorder notes
+- [ ] Image attachments in Supabase Storage instead of local-disk references
 
 ---
 

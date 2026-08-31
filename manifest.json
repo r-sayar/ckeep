@@ -1,12 +1,12 @@
 {
   "name": "Keep",
   "short_name": "Keep",
-  "description": "Minimal note-taking app",
+  "description": "Fast, offline-first notes and lists.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#fafafa",
-  "theme_color": "#fbbc04",
-  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
   "icons": [
     {
       "src": "/icon.svg",
@@ -18,9 +18,16 @@
   "shortcuts": [
     {
       "name": "New note",
-      "short_name": "New",
-      "description": "Open Keep with the composer focused",
+      "short_name": "Note",
+      "description": "Open Keep with the composer ready",
       "url": "/?new=1",
+      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "New list",
+      "short_name": "List",
+      "description": "Open Keep with a new checklist",
+      "url": "/?new=list",
       "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
     }
   ],
