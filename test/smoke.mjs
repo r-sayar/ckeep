@@ -318,14 +318,82 @@ labelled.nav.includes("Errands") && labelled.chip
   ? ok("adding a label shows a chip and a sidebar entry")
   : bad("adding a label shows a chip and a sidebar entry", JSON.stringify(labelled));
 
+/* ── 11b. images ───────────────────────────────────────────────────── */
+const notesBefore = await evaluate(`return window.__keep.titles().length;`);
+await evaluate(`
+  const c = document.createElement("canvas"); c.width = 240; c.height = 160;
+  const x = c.getContext("2d"); x.fillStyle = "#4285f4"; x.fillRect(0, 0, 240, 160);
+  await window.__keep.addImageTo("Edited title", c.toDataURL("image/png"));
+  await new Promise(r => setTimeout(r, 500));
+  return true;`);
+const img = await evaluate(`
+  const card = [...document.querySelectorAll(".note")].find(e => e.textContent.includes("Edited title"));
+  return { blobs: window.__keep.imageCount(),
+           refs: window.__keep.refsOf("Edited title"),
+           thumbs: card ? card.querySelectorAll(".thumb img").length : 0,
+           notes: window.__keep.titles().length };`);
+img.blobs === 1 && img.refs === 1 && img.thumbs === 1
+  ? ok("attaching an image stores it and renders a thumbnail")
+  : bad("attaching an image stores it and renders a thumbnail", JSON.stringify(img));
+img.notes === notesBefore
+  ? ok("the image's backing row is not shown as a note")
+  : bad("the image's backing row is not shown as a note", `notes went ${notesBefore} -> ${img.notes}`);
+
+const clean = await evaluate(`
+  const hay = window.__keep.hayOf("Edited title") || "";
+  return { hayLen: hay.length, hasData: hay.includes("data:image") };`);
+!clean.hasData && clean.hayLen < 500
+  ? ok("image data stays out of the search index")
+  : bad("image data stays out of the search index", JSON.stringify(clean));
+
 /* ── 12. reload: cache repaints everything without the network ──────── */
 await evaluate(`await window.__keep.settle(); return true;`);
+
+// Sample card geometry every frame across the next load. Catches the class of
+// bug where cards are in the DOM but not yet placed by the masonry, which
+// paints them stacked at the grid origin at shrink-to-fit widths.
+await send("Page.addScriptToEvaluateOnNewDocument", {
+  source: `window.__fr = [];
+    (function () {
+      let n = 0;
+      (function loop() {
+        const els = document.querySelectorAll(".note");
+        if (els.length) {
+          const rs = [...els].map(e => { const b = e.getBoundingClientRect();
+            return [Math.round(b.left), Math.round(b.top), Math.round(b.width)]; });
+          window.__fr.push({
+            placed: els[0].style.transform !== "",
+            lefts: new Set(rs.map(r => r[0])).size,
+            widths: new Set(rs.map(r => r[2])).size,
+            n: rs.length,
+          });
+        }
+        if (++n < 40) requestAnimationFrame(loop);
+      })();
+    })();`,
+});
 await load();
 await sleep(600);
-const afterReload = await evaluate(`return window.__keep.count();`);
-afterReload === 6
+const afterReload = await evaluate(`
+  return { total: window.__keep.count(), notes: window.__keep.titles().length,
+           blobs: window.__keep.imageCount(),
+           thumbs: document.querySelectorAll(".note .thumb img").length };`);
+afterReload.notes === 5 && afterReload.blobs === 1
   ? ok("notes survive a reload from the local cache")
-  : bad("notes survive a reload from the local cache", `count ${afterReload}, expected 6`);
+  : bad("notes survive a reload from the local cache", JSON.stringify(afterReload));
+afterReload.thumbs === 1
+  ? ok("images survive a reload and re-render offline")
+  : bad("images survive a reload and re-render offline", JSON.stringify(afterReload));
+
+/* ── 12b. no unpositioned frame during that load ───────────────────── */
+const frames = await evaluate(`return window.__fr || [];`);
+const unplaced = frames.filter((f) => f.n > 1 && (!f.placed || f.lefts === 1));
+frames.length === 0
+  ? bad("no unpositioned frame while loading", "sampler recorded nothing")
+  : unplaced.length === 0
+    ? ok(`no unpositioned frame while loading (${frames.length} frames sampled)`)
+    : bad("no unpositioned frame while loading",
+          `${unplaced.length} frame(s) painted cards before layout, e.g. ${JSON.stringify(unplaced[0])}`);
 
 /* ── 13. search finds them ─────────────────────────────────────────── */
 await evaluate(`
@@ -336,6 +404,25 @@ await evaluate(`
   return true;`);
 const searched = await evaluate(`return document.querySelectorAll(".note").length;`);
 searched === 1 ? ok("search narrows the grid") : bad("search narrows the grid", `got ${searched}`);
+
+/* ── 13b. removing an image deletes its backing row ────────────────── */
+await evaluate(`
+  const s = document.querySelector("#search"); s.value = ""; s.dispatchEvent(new Event("input"));
+  await new Promise(r => setTimeout(r, 250));
+  const card = [...document.querySelectorAll(".note")].find(e => e.textContent.includes("Edited title"));
+  card.click();
+  await new Promise(r => setTimeout(r, 450));
+  document.querySelector("#ed-images .rm-img").click();
+  await new Promise(r => setTimeout(r, 250));
+  document.querySelector('[data-ed="close"]').click();
+  await new Promise(r => setTimeout(r, 450));
+  return true;`);
+const removed = await evaluate(`
+  return { blobs: window.__keep.imageCount(), refs: window.__keep.refsOf("Edited title"),
+           thumbs: document.querySelectorAll(".note .thumb").length };`);
+removed.blobs === 0 && removed.refs === 0 && removed.thumbs === 0
+  ? ok("removing an image drops its row and its reference")
+  : bad("removing an image drops its row and its reference", JSON.stringify(removed));
 
 /* ── 14. nothing blew up ───────────────────────────────────────────── */
 const ignorable = (s) =>

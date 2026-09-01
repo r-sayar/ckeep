@@ -20,6 +20,9 @@ connection entirely: the queue is on disk and resumes where it left off.
 - **Masonry grid** of cards that reflow with an animated transition, plus a one-key list view
 - **Pinned / Others** sections
 - **Twelve note colours** (Google Keep's exact palette, in both light and dark)
+- **Images** — attach with the toolbar button, by pasting, or by dropping files
+  anywhere on the page (drop onto a card to attach to that note). Downscaled and
+  re-encoded on the way in, shown full-bleed on the card, click for a full-screen view
 - **Checklists** — `[ ]` / `[x]` lines in the body become real checkboxes; ticked
   items strike through and sink to the bottom. This is the same format
   `import_takeout.py` writes, so imported Keep checklists light up automatically
@@ -242,6 +245,26 @@ reached the server.
 **Trash** is a reserved `_ck:trash` label rather than a column, so it needs no
 migration. Labels under the `_ck:` namespace are hidden from the UI everywhere.
 
+**Images** take the same approach. Supabase Storage would be the natural home,
+but a bucket needs RLS policies on `storage.objects`, and those can only be
+created from the dashboard — the app has to work with no setup at all. So an
+image is another row in `notes`: labelled `_ck:blob`, archived, with the data
+URL in `body`. The owning note points at it with `_ck:img:<id>:<w>x<h>`.
+
+That buys a lot for free — images sync across devices through the same table,
+queue through the same outbox when offline, and are covered by the same RLS
+policy. It costs three accommodations, all of them small:
+
+- the main pull filters `_ck:blob` rows out server-side, so note sync stays
+  small; image bodies are fetched on demand and then cached like any other note
+- the outbox batches by payload size rather than row count
+- image rows are excluded from the search index, the note views, and the
+  CSV export
+
+Dimensions travel in the label so a card can reserve the right space before the
+image has decoded, which keeps the masonry from reflowing when it arrives.
+Images are capped at 1600px on the long edge and re-encoded to fit under ~1.4 MB.
+
 - All client traffic goes browser → Supabase REST. No backend server, no Vercel functions.
 - The publishable key is shipped in the HTML; Row Level Security restricts each
   user to rows where `auth.uid()::text = user_id`.
@@ -272,7 +295,7 @@ protocol directly.
 |---|---|
 | `index.html` | Markup shell + the synchronous theme/auth bootstrap that prevents any flash |
 | `app.css` | All styling — Keep's palette, both themes, masonry cards, editor, popovers |
-| `app.js` | The app — local-first store, outbox sync, masonry layout, editor, checklists |
+| `app.js` | The app — local-first store, outbox sync, masonry layout, editor, checklists, images |
 | `sw.js` | Service worker — network-first shell so deploys land, cache-first assets |
 | `manifest.json` | PWA manifest (icons, install metadata, share_target, app shortcuts) |
 | `icon.svg` | App icon (also used as maskable) |
@@ -294,10 +317,11 @@ protocol directly.
 - [x] Local-first writes — optimistic UI, offline outbox, retry
 - [x] Masonry grid, note colours, labels, trash, undo, multi-select
 - [x] Checklists, dark mode, keyboard shortcuts, inline editor
+- [x] Image attachments — paste, drop or pick; synced, offline-capable
 - [ ] Reminders
 - [ ] Collaborators
 - [ ] Drag to reorder notes
-- [ ] Image attachments in Supabase Storage instead of local-disk references
+- [ ] Move image bytes to Supabase Storage (needs a bucket + RLS policies)
 
 ---
 

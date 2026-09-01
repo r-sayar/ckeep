@@ -32,6 +32,20 @@
       if (v === "list") H.classList.add("list-view");
     } catch (e) {}
 
+    // Resolve the nav drawer here, not in JS. Deciding it later means <main>
+    // animates its margin open on every load, and the grid gets laid out at a
+    // width that is still moving.
+    try {
+      var nav = localStorage.getItem("keep_nav");
+      if (nav === null) nav = window.innerWidth >= 1200 ? "1" : "0";
+      if (nav === "1") H.classList.add("nav-open");
+    } catch (e) {
+      if (window.innerWidth >= 1200) H.classList.add("nav-open");
+    }
+
+    // Suppress every transition until after the first laid-out paint.
+    H.classList.add("booting");
+
     try {
       var raw = localStorage.getItem("sb-sywglobxvtxayvelhunb-auth-token");
       if (raw && raw.indexOf("base64-") === 0) {
@@ -119,6 +133,7 @@
         </div>
       </div>
       <div class="cmp-open">
+        <div id="cmp-images" class="thumbs edit" hidden></div>
         <input id="cmp-title" placeholder="Title" />
         <textarea id="cmp-body" placeholder="Take a note…" rows="1"></textarea>
         <ul id="cmp-list" class="checklist edit" hidden></ul>
@@ -128,6 +143,7 @@
             <button class="icon-btn" data-cmp="color" title="Background options"></button>
             <button class="icon-btn" data-cmp="label" title="Add label"></button>
             <button class="icon-btn" data-cmp="check" title="Show checkboxes"></button>
+            <button class="icon-btn" data-cmp="image" title="Add image"></button>
             <button class="icon-btn" data-cmp="pin" title="Pin note"></button>
           </div>
           <button class="text-btn" data-cmp="close">Close</button>
@@ -158,6 +174,7 @@
 <div id="editor-scrim" hidden>
   <div id="editor" role="dialog" aria-modal="true" aria-label="Edit note">
     <button class="pin-btn" id="ed-pin" title="Pin note"></button>
+    <div id="ed-images" class="thumbs edit" hidden></div>
     <input id="ed-title" placeholder="Title" />
     <textarea id="ed-body" placeholder="Take a note…" rows="1"></textarea>
     <ul id="ed-list" class="checklist edit" hidden></ul>
@@ -168,6 +185,7 @@
         <button class="icon-btn" data-ed="color" title="Background options"></button>
         <button class="icon-btn" data-ed="label" title="Add label"></button>
         <button class="icon-btn" data-ed="check" title="Show checkboxes"></button>
+        <button class="icon-btn" data-ed="image" title="Add image"></button>
         <button class="icon-btn" data-ed="archive" title="Archive"></button>
         <button class="icon-btn" data-ed="more" title="More"></button>
       </div>
@@ -177,6 +195,9 @@
 </div>
 
 <!-- ══ Floating layers ══ -->
+<input type="file" id="file-input" accept="image/*" multiple hidden />
+<div id="lightbox" hidden></div>
+<div id="drop-hint" hidden><span>Drop images to add them to a note</span></div>
 <div id="popover" hidden></div>
 <div id="snackbar" hidden><span id="snack-text"></span><button id="snack-action" class="text-btn"></button></div>
 <div id="fab" hidden></div>
