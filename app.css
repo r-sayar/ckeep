@@ -656,3 +656,94 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
+
+
+/* ══ Images ════════════════════════════════════════════════════ */
+/* Thumbnails bleed to the card edge like Keep. The negative margins cancel
+   the container's padding, so this must match .note / #editor / .cmp-open. */
+.thumbs { display: grid; gap: 2px; overflow: hidden; }
+.note .thumbs {
+  grid-template-columns: 1fr;
+  margin: -12px -16px 10px;
+  border-radius: 7px 7px 0 0;
+}
+.note .thumbs.multi { grid-template-columns: 1fr 1fr; }
+.note .thumbs.multi .thumb { aspect-ratio: 1; }
+/* An odd number of images would otherwise leave a hole in the mosaic —
+   let the last one run the full width instead. */
+.note .thumbs.multi .thumb:last-child:nth-child(odd) { grid-column: span 2; aspect-ratio: 2; }
+
+.thumb {
+  position: relative; width: 100%; min-height: 24px;
+  background: rgba(0, 0, 0, .06);
+  overflow: hidden;
+}
+html.dark .thumb { background: rgba(255, 255, 255, .06); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.note .thumb { cursor: zoom-in; }
+.thumb .more-badge {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .5); color: #fff;
+  font-size: 20px; font-weight: 500;
+}
+
+/* Editor + composer: full width, natural aspect, removable */
+.thumbs.edit { grid-template-columns: 1fr; gap: 4px; }
+#ed-images { margin: -16px -16px 12px; border-radius: 7px 7px 0 0; }
+#cmp-images { margin: -12px -16px 10px; border-radius: 7px 7px 0 0; }
+.thumbs.edit .thumb { cursor: zoom-in; }
+.thumbs.edit .thumb img { object-fit: contain; max-height: 55vh; }
+.rm-img {
+  position: absolute; top: 8px; right: 8px;
+  width: 30px; height: 30px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .55); color: #fff;
+  opacity: 0; transition: opacity .15s var(--ease), background .15s var(--ease);
+}
+.rm-img svg { width: 16px; height: 16px; fill: currentColor; }
+.thumb:hover .rm-img { opacity: 1; }
+.rm-img:hover { background: rgba(0, 0, 0, .75); }
+@media (hover: none) { .rm-img { opacity: 1; } }
+
+/* The pin sits on top of the first image, where the default grey disappears. */
+.note:has(.thumbs) .pin-btn,
+#editor:has(#ed-images:not([hidden])) .pin-btn {
+  color: #fff;
+  background: rgba(0, 0, 0, .38);
+}
+.note:has(.thumbs) .pin-btn:hover,
+#editor:has(#ed-images:not([hidden])) .pin-btn:hover { background: rgba(0, 0, 0, .58); }
+
+/* Full-screen viewer */
+#lightbox {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0, 0, 0, .92);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; cursor: zoom-out;
+  animation: pop .14s var(--ease);
+}
+#lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
+#lightbox .lb-close {
+  position: fixed; top: 16px; right: 16px;
+  width: 44px; height: 44px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255, 255, 255, .12); color: #fff;
+}
+#lightbox .lb-close svg { width: 24px; height: 24px; fill: currentColor; }
+#lightbox .lb-close:hover { background: rgba(255, 255, 255, .22); }
+
+/* Drag-and-drop affordance */
+#drop-hint {
+  position: fixed; inset: 0; z-index: 70;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .35); pointer-events: none;
+}
+#drop-hint span {
+  background: var(--surface); color: var(--fg);
+  border: 2px dashed var(--accent); border-radius: 12px;
+  padding: 20px 28px; font-size: 15px; box-shadow: var(--shadow-3);
+}
+
+/* An image-only note keeps its corners clean */
+.note:not(:has(.note-title)):not(:has(.note-body)):not(:has(.checklist)) .thumbs { margin-bottom: 4px; }

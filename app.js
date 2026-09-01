@@ -21,6 +21,37 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const RESERVED = "_ck:";
 const TRASH = "_ck:trash";
 
+/* Images.
+   Supabase Storage would be the natural home, but a bucket needs RLS policies
+   on storage.objects, which can only be created from the dashboard — and the
+   app has to work with no setup at all. So an image is just another row in
+   `notes`: labelled `_ck:blob`, archived, with the data URL in `body`. The
+   owning note points at it with a `_ck:img:<id>:<w>x<h>` label.
+
+   That buys a lot for free: images sync across devices through the same
+   table, queue through the same outbox when offline, and are covered by the
+   same RLS policy. The cost is that the main pull has to skip these rows, and
+   the outbox has to batch by payload size rather than row count. Both below. */
+const BLOB_LABEL = "_ck:blob";
+const IMG_PREFIX = "_ck:img:";
+const MAX_EDGE = 1600;        // longest side, px
+const MAX_CHARS = 1_400_000;  // data-URL ceiling per image
+
+const isBlobRow = (n) => (n.labels || []).includes(BLOB_LABEL);
+const imgLabel = (id, w, h) => `${IMG_PREFIX}${id}:${w}x${h}`;
+
+/* Dimensions ride along in the label so a card can reserve the right space
+   before the image has decoded — no reflow when it arrives. */
+function imageRefs(n) {
+  const out = [];
+  for (const l of n.labels || []) {
+    if (!l.startsWith(IMG_PREFIX)) continue;
+    const m = l.slice(IMG_PREFIX.length).match(/^([^:]+)(?::(\d+)x(\d+))?$/);
+    if (m) out.push({ id: m[1], w: +m[2] || 4, h: +m[3] || 3, label: l });
+  }
+  return out;
+}
+
 const COLORS = [
   ["DEFAULT", "Default"], ["RED", "Coral"], ["ORANGE", "Peach"],
   ["YELLOW", "Sand"], ["GREEN", "Mint"], ["TEAL", "Sage"],
@@ -75,6 +106,7 @@ const ICONS = {
   edit: "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.996.996 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
   keyboard: "M20 5H4c-1.1 0-1.99.9-1.99 2L2 17c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-9 3h2v2h-2V8zm0 3h2v2h-2v-2zM8 8h2v2H8V8zm0 3h2v2H8v-2zm-1 2H5v-2h2v2zm0-3H5V8h2v2zm9 7H8v-2h8v2zm0-4h-2v-2h2v2zm0-3h-2V8h2v2zm3 3h-2v-2h2v2zm0-3h-2V8h2v2z",
   download: "M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z",
+  image: "M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z",
   select: "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
 };
 
@@ -140,6 +172,8 @@ const D = {
   edScrim: $("#editor-scrim"), editor: $("#editor"), edTitle: $("#ed-title"),
   edBody: $("#ed-body"), edList: $("#ed-list"), edLabels: $("#ed-labels"),
   edMeta: $("#ed-meta"), edPin: $("#ed-pin"),
+  cmpImages: $("#cmp-images"), edImages: $("#ed-images"),
+  fileInput: $("#file-input"), lightbox: $("#lightbox"), dropHint: $("#drop-hint"),
   popover: $("#popover"), snackbar: $("#snackbar"), snackText: $("#snack-text"),
   snackAction: $("#snack-action"), syncPill: $("#sync-pill"), fab: $("#fab"),
   shortcuts: $("#shortcuts"), account: $("#account-btn"),
@@ -150,7 +184,10 @@ const isTrashed = (n) => n.labels?.includes(TRASH);
 const visibleLabels = (n) => (n.labels || []).filter((l) => !l.startsWith(RESERVED));
 
 const reindex = (n) => {
-  n._hay = ((n.title || "") + "\n" + (n.body || "") + "\n" + visibleLabels(n).join(" ")).toLowerCase();
+  // A blob row's body is a data URL; indexing it would put megabytes of
+  // base64 into the search haystack for nothing.
+  n._hay = isBlobRow(n) ? ""
+    : ((n.title || "") + "\n" + (n.body || "") + "\n" + visibleLabels(n).join(" ")).toLowerCase();
   return n;
 };
 
@@ -174,6 +211,7 @@ function visible() {
   const q = state.search.trim().toLowerCase();
   const terms = q ? q.split(/\s+/) : null;
   let out = notes.filter((n) => {
+    if (isBlobRow(n)) return false;
     const trashed = isTrashed(n);
     if (terms) {
       if (trashed) return false;
@@ -242,8 +280,17 @@ async function flush() {
       else { const n = byId.get(id); if (n) upserts.push(stripLocal(n)); else outbox.delete(id); }
     }
 
-    for (let i = 0; i < upserts.length; i += 200) {
-      const chunk = upserts.slice(i, i + 200);
+    // Batch by bytes: 200 rows is nothing for text notes and far too much
+    // when several of them carry an image.
+    let i = 0;
+    while (i < upserts.length) {
+      const chunk = [];
+      let bytes = 0;
+      while (i < upserts.length && chunk.length < 200 && bytes < 3_000_000) {
+        const row = upserts[i++];
+        chunk.push(row);
+        bytes += (row.body ? row.body.length : 0) + 300;
+      }
       const { error } = await supabase.from("notes").upsert(chunk, { onConflict: "id" });
       if (error) throw error;
       for (const n of chunk) if (outbox.get(n.id) !== "delete") outbox.delete(n.id);
@@ -270,6 +317,27 @@ async function flush() {
 
 /* Full pull. 4k rows is ~2 MB of JSON — a second or two, and the UI is
    already painted from cache, so nobody is looking at a spinner. */
+/* Image rows are excluded server-side so the note sync stays small; their
+   bodies are fetched on demand instead. If the filter is ever rejected we
+   fall back to an unfiltered page rather than failing the whole pull. */
+let blobFilter = true;
+async function fetchPage(from) {
+  let q = supabase.from("notes").select("*").eq("user_id", USER.id);
+  if (blobFilter) q = q.not("labels", "cs", '{"_ck:blob"}');
+  const { data, error } = await q
+    .order("created_at", { ascending: false })
+    .range(from, from + PULL_CHUNK - 1);
+  if (error) {
+    if (blobFilter) {
+      console.warn("blob filter rejected, pulling unfiltered", error);
+      blobFilter = false;
+      return fetchPage(from);
+    }
+    throw error;
+  }
+  return data;
+}
+
 let pulling = false;
 async function pullAll({ quiet = true } = {}) {
   if (!USER || pulling) return;
@@ -282,11 +350,7 @@ async function pullAll({ quiet = true } = {}) {
   try {
     const rows = [];
     for (let from = 0; ; from += PULL_CHUNK) {
-      const { data, error } = await supabase
-        .from("notes").select("*").eq("user_id", USER.id)
-        .order("created_at", { ascending: false })
-        .range(from, from + PULL_CHUNK - 1);
-      if (error) throw error;
+      const data = await fetchPage(from);
       rows.push(...data);
       if (data.length < PULL_CHUNK) break;
     }
@@ -303,7 +367,8 @@ async function pullAll({ quiet = true } = {}) {
     // would be missing from `rows` purely because of timing — and deleting it
     // here is exactly the "my new note vanished" bug.
     if (syncEpoch === fence && outbox.size === 0) {
-      for (const n of [...notes]) if (!seen.has(n.id)) drop(n.id);
+      // Blob rows are filtered out of the pull, so their absence proves nothing.
+      for (const n of [...notes]) if (!seen.has(n.id) && !isBlobRow(n)) drop(n.id);
     }
     state.syncError = false;
     saveLocal();
@@ -367,6 +432,25 @@ function destroy(n) {
   scheduleRender();
 }
 
+/* Permanent deletion has to take the note's image rows with it, otherwise
+   they linger in the table forever with nothing pointing at them. */
+function destroyDeep(n) {
+  const removed = [{ ...n }];
+  for (const ref of imageRefs(n)) {
+    const blob = byId.get(ref.id);
+    if (blob) { removed.push({ ...blob }); drop(blob.id); markDirty(blob.id, "delete"); }
+  }
+  drop(n.id);
+  markDirty(n.id, "delete");
+  scheduleRender();
+  return removed;
+}
+
+function restoreDeep(rows) {
+  for (const r of rows) { put(r); markDirty(r.id, "insert"); }
+  scheduleRender();
+}
+
 /* ══ Checklists ═══════════════════════════════════════════════════════
    Stored inside `body` as "[ ] item" / "[x] item" lines — the same shape
    import_takeout.py writes, so Keep imports light up as real checklists. */
@@ -403,6 +487,161 @@ function drainPending(ul, items) {
   const v = inp?.value.trim();
   if (v) { items.push({ checked: false, text: v }); inp.value = ""; }
 }
+
+/* ══ Images ═══════════════════════════════════════════════════════════ */
+
+/* Downscale and re-encode before storing. Phone photos are several megabytes
+   and none of that survives being shown in a 300px card. JPEG on white,
+   because a transparent PNG re-encoded to JPEG otherwise comes out black. */
+async function compressImage(file) {
+  const bmp = await createImageBitmap(file);
+  const fit = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
+  let w = Math.max(1, Math.round(bmp.width * fit));
+  let h = Math.max(1, Math.round(bmp.height * fit));
+
+  const encode = (cw, ch, q) => {
+    const c = document.createElement("canvas");
+    c.width = cw; c.height = ch;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, cw, ch);
+    ctx.drawImage(bmp, 0, 0, cw, ch);
+    return c.toDataURL("image/jpeg", q);
+  };
+
+  let q = 0.82;
+  let url = encode(w, h, q);
+  while (url.length > MAX_CHARS && (q > 0.4 || w > 400)) {
+    if (q > 0.4) q -= 0.15;
+    else { w = Math.round(w * 0.75); h = Math.round(h * 0.75); q = 0.7; }
+    url = encode(w, h, q);
+  }
+  bmp.close?.();
+  return { dataUrl: url, w, h };
+}
+
+/* Attach files to an existing note, or to the composer if none is given. */
+async function addImages(files, note) {
+  const pics = [...files].filter((f) => f.type.startsWith("image/"));
+  if (!pics.length || !USER) return;
+
+  let failed = 0;
+  for (const file of pics) {
+    let out;
+    try {
+      out = await compressImage(file);
+    } catch {
+      failed++;
+      continue;
+    }
+    const id = uuid();
+    put({
+      id, user_id: USER.id,
+      title: (file.name || "image").slice(0, 120),
+      body: out.dataUrl,
+      pinned: false, archived: true, color: "DEFAULT",
+      labels: [BLOB_LABEL], source_url: null, google_id: null,
+      created_at: nowISO(), updated_at: nowISO(),
+    });
+    markDirty(id, "insert");
+
+    const label = imgLabel(id, out.w, out.h);
+    if (note) addLabel(note, label);
+    else { cmp.images.push(label); renderCmpImages(); }
+  }
+
+  if (failed) snack(`Couldn't read ${failed} file${failed > 1 ? "s" : ""}`);
+  if (note && edNote === note) renderEdImages();
+  scheduleRender();
+}
+
+/* Blob rows normally arrive with the cache. One that hasn't (added on another
+   device) is fetched once and then lives in the model like any other note. */
+const imgPending = new Set();
+function getImage(id) {
+  const row = byId.get(id);
+  if (row?.body) return row.body;
+  if (imgPending.has(id) || !USER || !navigator.onLine) return null;
+  imgPending.add(id);
+  supabase.from("notes").select("*").eq("id", id).maybeSingle()
+    .then(({ data }) => { if (data) { put(data); saveLocal(); scheduleRender(); } })
+    .catch(() => {})
+    .finally(() => imgPending.delete(id));
+  return null;
+}
+
+function detachImage(label, note) {
+  const ref = imageRefs({ labels: [label] })[0];
+  if (note) removeLabel(note, label);
+  else cmp.images = cmp.images.filter((l) => l !== label);
+  const blob = ref && byId.get(ref.id);
+  if (blob) { drop(blob.id); markDirty(blob.id, "delete"); }
+  scheduleRender();
+}
+
+/* Markup only — the actual pixels are attached in hydrateImages, so a data URL
+   never has to be serialised into an innerHTML string. */
+function thumbsMarkup(refs, { edit = false } = {}) {
+  if (!refs.length) return "";
+  const shown = edit ? refs : refs.slice(0, 4);
+  const multi = !edit && shown.length > 1;
+  const extra = refs.length - shown.length;
+  return `<div class="thumbs${multi ? " multi" : ""}${edit ? " edit" : ""}">${
+    shown.map((r, i) => {
+      const ratio = multi ? "" : ` style="aspect-ratio:${r.w}/${r.h}"`;
+      const badge = !edit && extra > 0 && i === shown.length - 1
+        ? `<span class="more-badge">+${extra + 1}</span>` : "";
+      const rm = edit
+        ? `<button class="rm-img" data-rmimg="${esc(r.label)}" title="Remove image">${svg("close")}</button>` : "";
+      return `<div class="thumb" data-img="${esc(r.id)}"${ratio}>${badge}${rm}</div>`;
+    }).join("")}</div>`;
+}
+
+function hydrateImages(root) {
+  for (const t of $$(".thumb[data-img]", root)) {
+    if (t.querySelector("img")) continue;
+    const src = getImage(t.dataset.img);
+    if (!src) continue;
+    const img = document.createElement("img");
+    img.alt = "";
+    img.decoding = "async";
+    img.addEventListener("load", () => relayout(), { once: true });
+    img.src = src;
+    t.prepend(img);
+  }
+}
+
+function renderEdImages() {
+  if (!edNote) return;
+  const refs = imageRefs(edNote);
+  D.edImages.innerHTML = thumbsMarkup(refs, { edit: true });
+  D.edImages.hidden = !refs.length;
+  hydrateImages(D.edImages);
+}
+
+function renderCmpImages() {
+  const refs = imageRefs({ labels: cmp.images });
+  D.cmpImages.innerHTML = thumbsMarkup(refs, { edit: true });
+  D.cmpImages.hidden = !refs.length;
+  hydrateImages(D.cmpImages);
+}
+
+/* File picker is shared; the caller decides where the result lands. */
+let pickTarget = null;
+function pickImages(note) {
+  pickTarget = note || null;
+  D.fileInput.value = "";
+  D.fileInput.click();
+}
+
+function openLightbox(id) {
+  const src = getImage(id);
+  if (!src) return;
+  D.lightbox.innerHTML = `<button class="lb-close" title="Close">${svg("close")}</button><img alt="">`;
+  $("img", D.lightbox).src = src;
+  D.lightbox.hidden = false;
+}
+const closeLightbox = () => { D.lightbox.hidden = true; D.lightbox.innerHTML = ""; };
 
 /* ══ Rendering ════════════════════════════════════════════════════════ */
 const cards = new Map();   // note id -> element
@@ -504,6 +743,7 @@ function cardMarkup(n) {
   return `
     <button class="sel-btn" data-act="select" title="Select note">${svg("check")}</button>
     ${trashed ? "" : `<button class="pin-btn" data-act="pin" title="${n.pinned ? "Unpin" : "Pin"}">${svg(n.pinned ? "pin" : "pinOff")}</button>`}
+    ${thumbsMarkup(imageRefs(n))}
     ${n.title ? `<h3 class="note-title">${esc(n.title)}</h3>` : ""}
     ${bodyHtml}
     ${n.source_url ? `<a class="note-src" href="${esc(n.source_url)}" target="_blank" rel="noopener noreferrer">${esc(hostOf(n.source_url))}</a>` : ""}
@@ -519,6 +759,7 @@ function buildCard(n) {
   el.dataset.color = n.color || "DEFAULT";
   el.tabIndex = 0;
   el.innerHTML = cardMarkup(n);
+  hydrateImages(el);
   el._sig = cardSig(n);
   el.classList.toggle("pinned", !!n.pinned);
   el.classList.toggle("selected", selection.has(n.id));
@@ -533,6 +774,7 @@ function updateCard(el, n) {
   if (el._sig !== sig) {
     el._sig = sig;
     el.innerHTML = cardMarkup(n);
+    hydrateImages(el);
     el.dataset.color = n.color || "DEFAULT";
   }
   el.classList.toggle("pinned", !!n.pinned);
@@ -635,6 +877,9 @@ function onGridClick(e) {
 
   if (e.target.closest("a")) return;
 
+  const thumb = e.target.closest(".thumb[data-img]");
+  if (thumb && !selection.size) { e.stopPropagation(); openLightbox(thumb.dataset.img); return; }
+
   if (act === "select") { e.stopPropagation(); toggleSelect(n, card); return; }
   if (selection.size) { toggleSelect(n, card); return; }
 
@@ -667,9 +912,8 @@ function onGridClick(e) {
       return;
     case "destroy":
       e.stopPropagation();
-      { const copy = { ...n };
-        destroy(n);
-        snack("Note deleted forever", () => { put(copy); markDirty(copy.id, "insert"); scheduleRender(); }); }
+      { const removed = destroyDeep(n);
+        snack("Note deleted forever", () => restoreDeep(removed)); }
       return;
     case "more": e.stopPropagation(); noteMenu(hit, n); return;
   }
@@ -737,12 +981,13 @@ function syncSelBar() {
 const selectedNotes = () => [...selection].map((id) => byId.get(id)).filter(Boolean);
 
 /* ══ Composer ═════════════════════════════════════════════════════════ */
-const cmp = { open: false, color: "DEFAULT", labels: [], pinned: false, list: false, items: [] };
+const cmp = { open: false, color: "DEFAULT", labels: [], images: [], pinned: false, list: false, items: [] };
 
 function openComposer(listMode = false) {
   cmp.open = true;
   cmp.list = listMode;
   cmp.items = listMode ? [{ checked: false, text: "" }] : [];
+  renderCmpImages();
   D.composer.classList.remove("collapsed");
   applyCmpChrome();
   renderCmpList();
@@ -777,8 +1022,8 @@ function closeComposer(save = true) {
     body = D.cmpBody.value.trim();
   }
 
-  if (save && (title || body)) {
-    const labels = cmp.labels.slice();
+  if (save && (title || body || cmp.images.length)) {
+    const labels = [...cmp.labels, ...cmp.images];
     // Composing inside a label view files the note under that label, like Keep.
     if (state.view === "label" && state.label && !labels.includes(state.label)) labels.push(state.label);
     createNote({ title, body, pinned: cmp.pinned, color: cmp.color, labels });
@@ -788,8 +1033,17 @@ function closeComposer(save = true) {
     else if (state.view !== "notes" && state.view !== "label") go("notes");
   }
 
-  cmp.open = false; cmp.color = "DEFAULT"; cmp.labels = []; cmp.pinned = false;
+  // Anything not saved leaves its blob rows orphaned; drop them.
+  if (!save || !(title || body || cmp.images.length)) {
+    for (const l of cmp.images) {
+      const ref = imageRefs({ labels: [l] })[0];
+      const blob = ref && byId.get(ref.id);
+      if (blob) { drop(blob.id); markDirty(blob.id, "delete"); }
+    }
+  }
+  cmp.open = false; cmp.color = "DEFAULT"; cmp.labels = []; cmp.images = []; cmp.pinned = false;
   cmp.list = false; cmp.items = [];
+  renderCmpImages();
   D.cmpTitle.value = ""; D.cmpBody.value = "";
   autoGrow(D.cmpBody);
   D.composer.classList.add("collapsed");
@@ -816,6 +1070,7 @@ function openEditor(n, fromEl) {
   $('[data-ed="archive"]').title = n.archived ? "Unarchive" : "Archive";
   D.edMeta.textContent = "Edited " + fmtDate(n.updated_at || n.created_at);
   renderEdLabels();
+  renderEdImages();
   if (edItems) renderEditableList(D.edList, edItems, commitEditorList);
 
   D.edScrim.hidden = false;
@@ -1239,10 +1494,12 @@ function wire() {
   $('[data-cmp="color"]').innerHTML = svg("palette");
   $('[data-cmp="label"]').innerHTML = svg("labelOff");
   $('[data-cmp="check"]').innerHTML = svg("checked");
+  $('[data-cmp="image"]').innerHTML = svg("image");
   $('[data-cmp="pin"]').innerHTML = svg("pinOff");
   $('[data-ed="color"]').innerHTML = svg("palette");
   $('[data-ed="label"]').innerHTML = svg("labelOff");
   $('[data-ed="check"]').innerHTML = svg("checked");
+  $('[data-ed="image"]').innerHTML = svg("image");
   $('[data-ed="archive"]').innerHTML = svg("archive");
   $('[data-ed="more"]').innerHTML = svg("more");
   D.fab.innerHTML = svg("add");
@@ -1310,11 +1567,16 @@ function wire() {
   });
   D.composer.addEventListener("click", (e) => {
     const act = e.target.closest("[data-cmp]")?.dataset.cmp;
+    const rmImg = e.target.closest("[data-rmimg]")?.dataset.rmimg;
+    if (rmImg) { e.stopPropagation(); detachImage(rmImg, null); renderCmpImages(); relayout(); return; }
+    const thumb = e.target.closest(".thumb[data-img]");
+    if (thumb) { openLightbox(thumb.dataset.img); return; }
     const rm = e.target.closest("[data-rm]")?.dataset.rm;
     if (rm) { cmp.labels = cmp.labels.filter((l) => l !== rm); applyCmpChrome(); return; }
     if (!act) return;
     const anchor = e.target.closest("[data-cmp]");
     if (act === "close") closeComposer(true);
+    else if (act === "image") pickImages(null);
     else if (act === "pin") { cmp.pinned = !cmp.pinned; applyCmpChrome(); }
     else if (act === "color")
       colorPopover(anchor, [], (c) => { cmp.color = c; applyCmpChrome(); }, cmp.color);
@@ -1363,12 +1625,17 @@ function wire() {
     D.edPin.classList.toggle("on", !!edNote.pinned);
   };
   D.editor.addEventListener("click", (e) => {
+    const rmImg = e.target.closest("[data-rmimg]")?.dataset.rmimg;
+    if (rmImg && edNote) { e.stopPropagation(); detachImage(rmImg, edNote); renderEdImages(); return; }
+    const thumb = e.target.closest(".thumb[data-img]");
+    if (thumb) { openLightbox(thumb.dataset.img); return; }
     const rm = e.target.closest("[data-rm]")?.dataset.rm;
     if (rm && edNote) { removeLabel(edNote, rm); renderEdLabels(); relayout(); return; }
     const act = e.target.closest("[data-ed]")?.dataset.ed;
     if (!act || !edNote) return;
     const anchor = e.target.closest("[data-ed]");
     if (act === "close") closeEditor();
+    else if (act === "image") pickImages(edNote);
     else if (act === "color") colorPopover(anchor, [edNote], (c) => {
       patch(edNote, { color: c }); D.editor.dataset.color = c;
     });
@@ -1434,7 +1701,7 @@ function wire() {
     const ns = notes.filter(isTrashed);
     if (!ns.length) return;
     if (!confirm(`Permanently delete ${ns.length} note${ns.length > 1 ? "s" : ""}? This can't be undone.`)) return;
-    for (const n of ns) destroy(n);
+    for (const n of ns) destroyDeep(n);
     snack("Trash emptied");
   };
 
@@ -1466,6 +1733,61 @@ function wire() {
     if (document.visibilityState === "visible" && USER) { flushNow(); pullAll(); }
   });
 
+  // ── images: picker, paste, drag-and-drop ───────────────────────────
+  D.fileInput.addEventListener("change", () => {
+    const files = D.fileInput.files;
+    if (files?.length) addImages(files, pickTarget);
+    pickTarget = null;
+    D.fileInput.value = "";
+  });
+
+  const filesFrom = (dt) => {
+    if (!dt) return [];
+    if (dt.files?.length) return [...dt.files];
+    return [...(dt.items || [])]
+      .filter((i) => i.kind === "file")
+      .map((i) => i.getAsFile())
+      .filter(Boolean);
+  };
+
+  document.addEventListener("paste", (e) => {
+    const files = filesFrom(e.clipboardData).filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    if (edNote) return addImages(files, edNote);
+    if (!cmp.open) { if (state.view !== "notes" && state.view !== "label") go("notes"); openComposer(false); }
+    addImages(files, null);
+  });
+
+  let dragDepth = 0;
+  const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+  window.addEventListener("dragenter", (e) => {
+    if (!hasFiles(e) || !USER) return;
+    e.preventDefault();
+    if (++dragDepth === 1) D.dropHint.hidden = false;
+  });
+  window.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+  window.addEventListener("dragleave", (e) => {
+    if (!hasFiles(e)) return;
+    if (--dragDepth <= 0) { dragDepth = 0; D.dropHint.hidden = true; }
+  });
+  window.addEventListener("drop", (e) => {
+    if (!hasFiles(e) || !USER) return;
+    e.preventDefault();
+    dragDepth = 0;
+    D.dropHint.hidden = true;
+    const files = filesFrom(e.dataTransfer).filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    if (edNote) return addImages(files, edNote);
+    const card = e.target.closest?.(".note");
+    const onto = card && byId.get(card.dataset.id);
+    if (onto && !isTrashed(onto)) return addImages(files, onto);
+    if (!cmp.open) { if (state.view !== "notes" && state.view !== "label") go("notes"); openComposer(false); }
+    addImages(files, null);
+  });
+
+  D.lightbox.addEventListener("click", closeLightbox);
+
   keyboard();
 }
 
@@ -1473,6 +1795,7 @@ function wire() {
 function keyboard() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+      if (!D.lightbox.hidden) return closeLightbox();
       if (!D.popover.hidden) return closePopover();
       if (!D.shortcuts.hidden) return (D.shortcuts.hidden = true);
       if (edNote) return closeEditor();
@@ -1486,7 +1809,7 @@ function keyboard() {
     const t = e.target;
     const typing = t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable;
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (edNote || cmp.open || !D.popover.hidden || !D.shortcuts.hidden) return;
+    if (edNote || cmp.open || !D.popover.hidden || !D.shortcuts.hidden || !D.lightbox.hidden) return;
 
     switch (e.key) {
       case "c": case "n": e.preventDefault(); if (state.view !== "notes") go("notes"); openComposer(false); break;
@@ -1504,7 +1827,10 @@ function showShortcuts() {
     ["c or n", "New note"], ["l", "New list"], ["/", "Search"],
     ["g", "Toggle grid / list"], ["m", "Toggle menu"],
     ["Esc", "Close / clear"], ["⌘ or Ctrl + Enter", "Save and close"],
-    ["Enter (in a list)", "New list item"], ["?", "This dialog"],
+    ["Enter (in a list)", "New list item"],
+    ["⌘/Ctrl + V", "Paste an image into a note"],
+    ["Drag & drop", "Drop images onto a note or the page"],
+    ["?", "This dialog"],
   ];
   D.shortcuts.innerHTML = `<div class="sc-card"><h3>Keyboard shortcuts</h3>
     ${rows.map(([k, v]) => `<div class="sc-row"><b>${esc(v)}</b><kbd>${esc(k)}</kbd></div>`).join("")}</div>`;
@@ -1623,10 +1949,14 @@ window.addEventListener("pagehide", () => { if (cmp.open) closeComposer(true); }
 
 /* ══ Service worker ═══════════════════════════════════════════════════ */
 if ("serviceWorker" in navigator) {
+  // Reload only when an *existing* controller is replaced, i.e. a new build
+  // took over. On a first visit there is no controller, and the handover fires
+  // anyway — reloading there just makes the first load flash for no reason.
+  const hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register("/sw.js").catch(() => {});
   let reloading = false;
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (reloading) return;
+    if (!hadController || reloading) return;
     reloading = true;
     location.reload();
   });
@@ -1636,12 +1966,12 @@ if ("serviceWorker" in navigator) {
 /* ══ Test hooks ═══════════════════════════════════════════════════════
    Only attached on a local dev origin; test/smoke.mjs drives these. */
 if (["localhost", "127.0.0.1"].includes(location.hostname)) {
-  const find = (t) => notes.find((n) => !isTrashed(n) && n.title === t);
+  const find = (t) => notes.find((n) => !isTrashed(n) && !isBlobRow(n) && n.title === t);
   window.__keep = {
     count: () => notes.length,
     outboxSize: () => outbox.size,
-    titles: () => notes.filter((n) => !isTrashed(n)).map((n) => n.title),
-    trashTitles: () => notes.filter(isTrashed).map((n) => n.title),
+    titles: () => notes.filter((n) => !isTrashed(n) && !isBlobRow(n)).map((n) => n.title),
+    trashTitles: () => notes.filter((n) => isTrashed(n) && !isBlobRow(n)).map((n) => n.title),
     bodyOf: (t) => find(t)?.body,
     make: (f) => createNote(f),
     trashByTitle: (t) => { const n = find(t); if (n) trash(n); },
@@ -1650,6 +1980,15 @@ if (["localhost", "127.0.0.1"].includes(location.hostname)) {
       clearTimeout(saveTimer);
       await idb.set(cacheKey(), notes.map(stripLocal));
       await idb.set(outboxKey(), [...outbox.entries()]);
+    },
+    imageCount: () => notes.filter(isBlobRow).length,
+    hayOf: (t) => find(t)?._hay,
+    refsOf: (t) => imageRefs(find(t) || { labels: [] }).length,
+    addImageTo: async (t, dataUrl) => {
+      const n = find(t);
+      const blob = await fetch(dataUrl).then((r) => r.blob());
+      const file = new File([blob], "test.png", { type: blob.type });
+      await addImages([file], n || null);
     },
     resetForTest: async () => {
       notes = []; byId.clear(); outbox.clear(); selection.clear();
