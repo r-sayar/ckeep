@@ -1,7 +1,7 @@
 {
-  "name": "Keep",
-  "short_name": "Keep",
-  "description": "Fast, offline-first notes and lists.",
+  "name": "NoteKeeper",
+  "short_name": "NoteKeeper",
+  "description": "Notes, lists, and a scrollable feed of every video, paper and link you save.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -17,18 +17,43 @@
   ],
   "shortcuts": [
     {
+      "name": "Feed",
+      "short_name": "Feed",
+      "description": "Scroll previews of every link in your notes",
+      "url": "/?view=feed",
+      "icons": [
+        {
+          "src": "/icon.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
+    },
+    {
       "name": "New note",
       "short_name": "Note",
-      "description": "Open Keep with the composer ready",
+      "description": "Open NoteKeeper with the composer ready",
       "url": "/?new=1",
-      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+      "icons": [
+        {
+          "src": "/icon.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
     },
     {
       "name": "New list",
       "short_name": "List",
-      "description": "Open Keep with a new checklist",
+      "description": "Open NoteKeeper with a new checklist",
       "url": "/?new=list",
-      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+      "icons": [
+        {
+          "src": "/icon.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
     }
   ],
   "share_target": {

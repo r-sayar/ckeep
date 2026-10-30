@@ -337,7 +337,52 @@ await evaluate(`
 const searched = await evaluate(`return document.querySelectorAll(".note").length;`);
 searched === 1 ? ok("search narrows the grid") : bad("search narrows the grid", `got ${searched}`);
 
-/* ── 14. nothing blew up ───────────────────────────────────────────── */
+/* ── 14. feed: links in notes become previews ──────────────────────── */
+await evaluate(`
+  const s = document.querySelector("#search");
+  s.value = ""; s.dispatchEvent(new Event("input"));
+  location.hash = "";
+  document.querySelector('.nav-item[data-view="feed"]').click();
+  await new Promise(r => setTimeout(r, 100));
+  for (const u of [
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://arxiv.org/abs/1706.03762",
+    "https://doi.org/10.1038/s41586-021-03819-2",
+    "https://www.biorxiv.org/content/10.1101/2023.04.30.538439v1",
+    "https://youtube.com/shorts/aqz-KE-bpKQ",
+    "https://www.theverge.com/",
+  ]) {
+    document.querySelector("#feed-input").value = u;
+    document.querySelector("#feed-add").requestSubmit();
+    await new Promise(r => setTimeout(r, 60));
+  }
+  return true;`);
+await sleep(5000);
+const feed = await evaluate(`
+  const cards = [...document.querySelectorAll("#feed-list .fd-card")];
+  return { n: cards.length, kinds: cards.map(c => c.className),
+    iframes: 0, yt: document.querySelectorAll(".fd-thumb").length,
+    titles: cards.map(c => c.querySelector(".fd-title")?.textContent) };`);
+feed.n === 6 ? ok("feed shows a card per link") : bad("feed shows a card per link", JSON.stringify(feed));
+feed.yt >= 2 ? ok("YouTube links render a playable thumbnail") : bad("YouTube links render a playable thumbnail", JSON.stringify(feed));
+console.log("    titles:", feed.titles);
+await evaluate(`document.querySelector('.fd-thumb').click(); await new Promise(r => setTimeout(r, 300)); return true;`);
+const playing = await evaluate(`return !!document.querySelector('.fd-media iframe[src*="youtube-nocookie.com/embed/"]');`);
+playing ? ok("tapping a video embeds the player inline") : bad("tapping a video embeds the player inline");
+await evaluate(`document.querySelector('.fd-chip[data-kind="paper"]').click(); await new Promise(r => setTimeout(r, 100)); return true;`);
+const papers = await evaluate(`return document.querySelectorAll("#feed-list .fd-card").length;`);
+papers === 3 ? ok("Papers filter keeps arXiv/DOI/bioRxiv links") : bad("Papers filter keeps arXiv/DOI/bioRxiv links", `got ${papers}`);
+await evaluate(`document.querySelector('.fd-chip[data-kind="all"]').click(); return true;`);
+if (process.env.SHOT) {
+  await send("Emulation.setDeviceMetricsOverride", { width: 412, height: 1800, deviceScaleFactor: 1, mobile: true });
+  await evaluate(`document.body.classList.remove("nav-open"); scrollTo(0, 0); return true;`);
+  await sleep(2500);
+  const { data } = await send("Page.captureScreenshot", { format: "png" });
+  (await import("node:fs")).writeFileSync(process.env.SHOT, Buffer.from(data, "base64"));
+  await send("Emulation.clearDeviceMetricsOverride");
+}
+
+/* ── 15. nothing blew up ───────────────────────────────────────────── */
 const ignorable = (s) =>
   /supabase|Failed to load resource|401|websocket|realtime|net::ERR/i.test(s);
 const realErrors = [...consoleErrors, ...pageErrors].filter((e) => !ignorable(e));

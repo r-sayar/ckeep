@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════════════════════
-   Keep — a local-first note app.
+   NoteKeeper — a local-first note app with a media feed.
 
    The rule that makes this feel fast: the network is never on the critical
    path of an interaction. Every mutation is applied to the in-memory model
@@ -69,6 +69,10 @@ const ICONS = {
   checkCircle: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z",
   add: "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z",
   copy: "M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z",
+  feed: "M10 16.5l6-4.5-6-4.5v9zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z",
+  play: "M8 5v14l11-7z",
+  paper: "M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z",
+  obsidian: "M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 18H6V4h12v16zM8 6h8v2H8zm0 4h8v2H8zm0 4h5v2H8z",
   dark: "M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-2.98 0-5.4-2.42-5.4-5.4 0-1.81.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z",
   light: "M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58a.996.996 0 00-1.41 0 .996.996 0 000 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37a.996.996 0 00-1.41 0 .996.996 0 000 1.41l1.06 1.06c.39.39 1.03.39 1.41 0a.996.996 0 000-1.41l-1.06-1.06zm1.06-10.96a.996.996 0 000-1.41.996.996 0 00-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36a.996.996 0 000-1.41.996.996 0 00-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z",
   logout: "M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z",
@@ -115,7 +119,8 @@ const outbox = new Map();              // id -> "upsert" | "delete"
 const selection = new Set();
 
 const state = {
-  view: "notes",                       // notes | archive | trash | label
+  view: "notes",                       // notes | feed | archive | trash | label | obsidian
+  feedKind: (() => { try { return localStorage.getItem("nk_feed_kind") || "all"; } catch { return "all"; } })(),
   label: null,
   search: "",
   limit: PAGE,
@@ -143,11 +148,22 @@ const D = {
   popover: $("#popover"), snackbar: $("#snackbar"), snackText: $("#snack-text"),
   snackAction: $("#snack-action"), syncPill: $("#sync-pill"), fab: $("#fab"),
   shortcuts: $("#shortcuts"), account: $("#account-btn"),
+  feed: $("#feed"), feedList: $("#feed-list"), feedChips: $("#feed-chips"),
+  feedForm: $("#feed-add"), feedInput: $("#feed-input"),
 };
 
 /* ══ Model helpers ════════════════════════════════════════════════════ */
 const isTrashed = (n) => n.labels?.includes(TRASH);
 const visibleLabels = (n) => (n.labels || []).filter((l) => !l.startsWith(RESERVED));
+
+/* Notes synced from the Obsidian vault carry the "_ck:obsidian" marker and a
+   "_ck:path:<vault-relative path>" label (both reserved, so hidden from chips
+   and the label editor). They live on their own "Obsidian" page and are kept
+   out of every other view. The local obsidian_sync.py script owns them. */
+const OBSIDIAN = RESERVED + "obsidian";
+const OBS_PATH = RESERVED + "path:";
+const isObsidian = (n) => n.labels?.includes(OBSIDIAN);
+const obsPath = (n) => (n.labels || []).find((l) => l.startsWith(OBS_PATH))?.slice(OBS_PATH.length) || null;
 
 const reindex = (n) => {
   n._hay = ((n.title || "") + "\n" + (n.body || "") + "\n" + visibleLabels(n).join(" ")).toLowerCase();
@@ -173,14 +189,21 @@ const drop = (id) => {
 function visible() {
   const q = state.search.trim().toLowerCase();
   const terms = q ? q.split(/\s+/) : null;
+  const inObsidianView = state.view === "obsidian";
   let out = notes.filter((n) => {
     const trashed = isTrashed(n);
     if (terms) {
       if (trashed) return false;
+      // Search stays within the current realm: Obsidian notes match only on the
+      // Obsidian page, everything else matches only outside it.
+      if (state.view !== "feed" && isObsidian(n) !== inObsidianView) return false;
       return terms.every((t) => n._hay.includes(t));
     }
     if (state.view === "trash") return trashed;
     if (trashed) return false;
+    if (state.view === "feed") return true;
+    if (inObsidianView) return isObsidian(n);
+    if (isObsidian(n)) return false;   // keep vault notes off every non-Obsidian page
     if (state.view === "archive") return n.archived;
     if (state.view === "label") return (n.labels || []).includes(state.label);
     return !n.archived;
@@ -416,6 +439,22 @@ function scheduleRender() {
 
 function render() {
   const list = visible();
+  const inFeed = state.view === "feed";
+  D.feed.hidden = !inFeed;
+  if (inFeed) {
+    for (const [, el] of cards) el.remove();
+    cards.clear();
+    D.secPinned.hidden = D.secOthers.hidden = true;
+    const { total, shown } = renderFeed(list);
+    D.empty.hidden = total > 0;
+    if (!total) renderEmpty();
+    D.trashNote.hidden = true;
+    D.sentinel.dataset.more = total > shown ? "1" : "";
+    raf(maybeLoadMore);
+    renderNav();
+    return;
+  }
+  if (feedCards.size) { for (const [, el] of feedCards) el.remove(); feedCards.clear(); }
   const shown = list.slice(0, state.limit);
   const pinned = [], others = [];
   const groupPins = state.view === "notes" || state.view === "label";
@@ -549,11 +588,327 @@ function renderEmpty() {
     archive: ["archive", "Your archived notes appear here", ""],
     trash: ["trash", "No notes in Trash", ""],
     label: ["label", "No notes with this label yet", ""],
+    feed: ["feed", "Links in your notes show up here", "Paste a YouTube video, paper or any link above, or share one to the app"],
+    obsidian: ["obsidian", "No Obsidian notes synced yet", "Run obsidian_sync.py to sync your vault"],
   };
   const [icon, title, sub] = state.search
     ? ["search", "No matching notes", "Try a different search"]
     : map[state.view] || map.notes;
   D.empty.innerHTML = `${svg(icon)}<p>${title}</p>${sub ? `<small>${sub}</small>` : ""}`;
+}
+
+/* ══ Feed ═════════════════════════════════════════════════════════════
+   Every link in every note, as a vertical scroll of previews: YouTube /
+   Vimeo / Spotify play inline, papers (arXiv, DOI, bioRxiv, PDFs) show
+   title + authors + abstract, images and video files render directly, and
+   anything else gets an Open Graph card. Metadata is fetched lazily as a
+   card nears the viewport and cached in localStorage forever. */
+const URL_RE = /https?:\/\/[^\s<>"'`]+/g;
+const FEED_KINDS = [["all", "All"], ["video", "Videos"], ["paper", "Papers"], ["image", "Images"], ["link", "Links"]];
+const feedCards = new Map();   // "noteId|url" -> element
+
+function linksOf(n) {
+  const text = [n.source_url || "", n.title || "", n.body || ""].join("\n");
+  const out = [];
+  for (let u of text.match(URL_RE) || []) {
+    u = u.replace(/[.,;:!?)\]}>*]+$/, "");
+    if (!out.includes(u)) out.push(u);
+  }
+  return out;
+}
+
+function classify(raw) {
+  let u;
+  try { u = new URL(raw); } catch { return { kind: "link", type: "link", url: raw }; }
+  const h = u.hostname.replace(/^(www|m|music)\./, "");
+  const p = u.pathname;
+  const ext = (p.match(/\.([a-z0-9]{2,5})$/i)?.[1] || "").toLowerCase();
+  const base = { url: raw, host: h };
+
+  if (h === "youtu.be" || h.endsWith("youtube.com") || h === "youtube-nocookie.com") {
+    const id = h === "youtu.be" ? p.slice(1).split("/")[0]
+      : u.searchParams.get("v") || p.match(/^\/(?:shorts|embed|live|v)\/([\w-]{6,})/)?.[1];
+    if (id) {
+      const t = u.searchParams.get("t") || u.searchParams.get("start");
+      const start = t ? (parseInt(t) || 0) : 0;
+      return { ...base, kind: "video", type: "youtube", id, start, short: p.startsWith("/shorts/") };
+    }
+    const list = u.searchParams.get("list");
+    if (list) return { ...base, kind: "video", type: "ytlist", id: list };
+  }
+  if (h === "vimeo.com") {
+    const id = p.match(/^\/(\d+)/)?.[1];
+    if (id) return { ...base, kind: "video", type: "vimeo", id };
+  }
+  if (h === "open.spotify.com") {
+    const m = p.match(/^\/(?:intl-\w+\/)?(track|album|playlist|episode|show)\/(\w+)/);
+    if (m) return { ...base, kind: "video", type: "spotify", sub: m[1], id: m[2] };
+  }
+  if (["jpg", "jpeg", "png", "gif", "webp", "avif", "svg"].includes(ext)) return { ...base, kind: "image", type: "image" };
+  if (["mp4", "webm", "mov", "m4v"].includes(ext)) return { ...base, kind: "video", type: "file" };
+  if (["mp3", "m4a", "ogg", "wav", "opus"].includes(ext)) return { ...base, kind: "video", type: "audio" };
+
+  if (h === "arxiv.org" || h === "export.arxiv.org") {
+    const id = p.match(/^\/(?:abs|pdf|html)\/(.+?)(?:v\d+)?(?:\.pdf)?\/?$/)?.[1];
+    if (id) return { ...base, kind: "paper", type: "arxiv", id, pdf: `https://arxiv.org/pdf/${id}` };
+  }
+  const doi = (h === "doi.org" || h === "dx.doi.org")
+    ? decodeURIComponent(p.slice(1))
+    : decodeURIComponent(p).match(/\b(10\.\d{4,9}\/[^\s?#]+)/)?.[1];
+  if (doi) {
+    const clean = doi.replace(/(v\d+)?(\.full|\.abstract|\.full\.pdf|\.pdf|\/full|\/abstract)*$/i, "");
+    const pdf = ext === "pdf" ? raw
+      : /biorxiv|medrxiv/.test(h) ? `https://www.${h}/content/${doi.replace(/(\.full.*)$/, "")}.full.pdf` : null;
+    return { ...base, kind: "paper", type: "doi", id: clean, pdf };
+  }
+  if (h === "pubmed.ncbi.nlm.nih.gov" || /\/pmc\/articles\//.test(p) || h === "pmc.ncbi.nlm.nih.gov")
+    return { ...base, kind: "paper", type: "og" };
+  if (ext === "pdf") return { ...base, kind: "paper", type: "pdf", pdf: raw };
+  if (/scholar\.google|semanticscholar|openreview\.net|researchgate|sciencedirect|springer|nature\.com|cell\.com|science\.org|pnas\.org|plos|frontiersin|wiley|acm\.org|ieee\.org/.test(h))
+    return { ...base, kind: "paper", type: "og" };
+  return { ...base, kind: "link", type: "og" };
+}
+
+/* ── metadata ─────────────────────────────────────────────────────────── */
+const META_KEY = (u) => "nk_meta:" + u;
+const metaMem = new Map();
+function metaCached(u) {
+  if (metaMem.has(u)) return metaMem.get(u);
+  try {
+    const v = JSON.parse(localStorage.getItem(META_KEY(u)) || "null");
+    if (v && (!v._fail || Date.now() - v._fail < 864e5)) { metaMem.set(u, v); return v; }
+  } catch {}
+  return null;
+}
+function metaStore(u, v) {
+  metaMem.set(u, v);
+  try { localStorage.setItem(META_KEY(u), JSON.stringify(v)); } catch {}
+}
+
+const getJSON = async (url) => {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+};
+const stripTags = (s) => String(s || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+const fmtAuthors = (list) => !list?.length ? ""
+  : list.length > 4 ? `${list.slice(0, 3).join(", ")} … ${list[list.length - 1]}` : list.join(", ");
+
+let microlinkBlocked = 0;
+async function og(url) {
+  if (Date.now() < microlinkBlocked) throw new Error("rate");
+  const r = await fetch("https://api.microlink.io/?url=" + encodeURIComponent(url));
+  if (r.status === 429) { microlinkBlocked = Date.now() + 36e5; throw new Error("rate"); }
+  const j = await r.json();
+  if (j.status !== "success") throw new Error(j.code || "fail");
+  const d = j.data;
+  return { title: d.title, desc: d.description, image: d.image?.url, site: d.publisher, authors: d.author, date: d.date?.slice(0, 10) };
+}
+
+async function fetchMeta(c) {
+  switch (c.type) {
+    case "youtube": case "ytlist": case "vimeo": case "spotify": {
+      const ep = c.type === "vimeo" ? "https://vimeo.com/api/oembed.json?url="
+        : c.type === "spotify" ? "https://open.spotify.com/oembed?url="
+        : "https://www.youtube.com/oembed?format=json&url=";
+      const j = await getJSON(ep + encodeURIComponent(c.url));
+      return { title: j.title, site: j.author_name || j.provider_name, image: j.thumbnail_url };
+    }
+    case "arxiv": {
+      const j = await getJSON(`https://api.datacite.org/dois/10.48550/arxiv.${c.id.toLowerCase()}`);
+      const a = j.data.attributes;
+      return {
+        title: a.titles?.[0]?.title,
+        authors: fmtAuthors(a.creators?.map((x) => x.name?.includes(",") ? x.name.split(",").reverse().join(" ").trim() : x.name)),
+        desc: a.descriptions?.find((d) => d.descriptionType === "Abstract")?.description,
+        site: "arXiv:" + c.id, date: a.publicationYear ? String(a.publicationYear) : "",
+      };
+    }
+    case "doi": {
+      try {
+        const { message: m } = await getJSON(`https://api.crossref.org/works/${encodeURIComponent(c.id)}`);
+        return {
+          title: stripTags(m.title?.[0]),
+          authors: fmtAuthors(m.author?.map((a) => [a.given, a.family].filter(Boolean).join(" "))),
+          desc: stripTags(m.abstract).replace(/^Abstract\s*/i, ""),
+          site: m["container-title"]?.[0] || m.institution?.[0]?.name || m.publisher,
+          date: (m.published?.["date-parts"]?.[0] || []).join("-"),
+        };
+      } catch { return og(c.url); }
+    }
+    case "pdf": {
+      const name = decodeURIComponent(new URL(c.url).pathname.split("/").pop()).replace(/\.pdf$/i, "").replace(/[_-]+/g, " ");
+      return { title: name || c.host, site: c.host };
+    }
+    case "image": case "file": case "audio":
+      return { title: decodeURIComponent(new URL(c.url).pathname.split("/").pop()), site: c.host };
+    default:
+      return og(c.url);
+  }
+}
+
+const metaQueue = [];
+let metaActive = 0;
+function requestMeta(c, el) {
+  if (metaCached(c.url)) return;
+  metaQueue.push([c, el]);
+  pumpMeta();
+}
+function pumpMeta() {
+  while (metaActive < 4 && metaQueue.length) {
+    const [c, el] = metaQueue.shift();
+    if (metaCached(c.url)) continue;
+    metaActive++;
+    fetchMeta(c)
+      .then((m) => metaStore(c.url, m || {}))
+      .catch((e) => { if (e.message !== "rate") metaStore(c.url, { _fail: Date.now() }); })
+      .finally(() => {
+        metaActive--;
+        if (el.isConnected) fillFeedCard(el);
+        pumpMeta();
+      });
+  }
+}
+
+const feedIO = "IntersectionObserver" in window ? new IntersectionObserver((ents) => {
+  for (const e of ents) if (e.isIntersecting) {
+    feedIO.unobserve(e.target);
+    requestMeta(e.target._c, e.target);
+  }
+}, { rootMargin: "800px 0px" }) : null;
+
+/* ── rendering ────────────────────────────────────────────────────────── */
+function feedItems(list) {
+  const out = [];
+  for (const n of list) for (const url of linksOf(n)) {
+    const c = classify(url);
+    if (state.feedKind === "all" || c.kind === state.feedKind) out.push({ n, c, key: n.id + "|" + url });
+  }
+  return out;
+}
+
+const favicon = (host) => `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`;
+
+function mediaMarkup(c, m) {
+  const thumb = (src, cls = "") => `<button class="fd-thumb ${cls}" data-fd="play" aria-label="Play">
+      <img src="${esc(src)}" loading="lazy" alt="" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
+      <span class="fd-play">${svg("play")}</span></button>`;
+  switch (c.type) {
+    case "youtube": return `<div class="fd-media ${c.short ? "tall" : ""}">${thumb(`https://i.ytimg.com/vi/${c.id}/hqdefault.jpg`)}</div>`;
+    case "ytlist": case "vimeo": return m?.image ? `<div class="fd-media">${thumb(m.image)}</div>` : `<div class="fd-media">${thumb("", "blank")}</div>`;
+    case "spotify": return `<div class="fd-media spotify"><iframe loading="lazy" src="https://open.spotify.com/embed/${c.sub}/${c.id}" allow="encrypted-media; clipboard-write; fullscreen; picture-in-picture"></iframe></div>`;
+    case "image": return `<div class="fd-media auto"><img src="${esc(c.url)}" loading="lazy" alt="" referrerpolicy="no-referrer"></div>`;
+    case "file": return `<div class="fd-media"><video src="${esc(c.url)}" controls playsinline preload="metadata"></video></div>`;
+    case "audio": return `<audio src="${esc(c.url)}" controls preload="none" class="fd-audio"></audio>`;
+  }
+  if (c.kind === "paper") {
+    return `<div class="fd-paper-band">${svg("paper")}<span>${esc(c.type === "arxiv" ? "arXiv" : c.type === "pdf" ? "PDF" : "Paper")}</span></div>`;
+  }
+  return m?.image ? `<div class="fd-media auto"><img src="${esc(m.image)}" loading="lazy" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></div>` : "";
+}
+
+function noteSnippet(n, url) {
+  const t = [n.title, (n.body || "").replace(URL_RE, "")].filter(Boolean).join(" — ").replace(/\s+/g, " ").trim();
+  return t && t !== "—" ? t : "";
+}
+
+function fillFeedCard(el) {
+  const { c, n } = el;
+  const m = metaCached(c.url) || {};
+  const sig = JSON.stringify([m, n.title, n.body, n.updated_at]);
+  if (el._sig === sig) return;
+  el._sig = sig;
+  const title = m.title || (c.type === "youtube" ? "YouTube video" : c.type === "arxiv" ? "arXiv " + c.id : c.type === "doi" ? c.id : c.url);
+  const sub = [m.authors, [m.site, m.date].filter(Boolean).join(" · ")].filter(Boolean);
+  const snippet = noteSnippet(n, c.url);
+  const pdf = c.pdf;
+  el.innerHTML = `
+    <div class="fd-head">
+      <img class="fd-fav" src="${favicon(c.host || "")}" alt="" loading="lazy">
+      <span class="fd-host">${esc(c.host || "")}</span>
+      <span class="fd-date">${esc(fmtDate(n.updated_at || n.created_at))}</span>
+    </div>
+    ${mediaMarkup(c, m)}
+    <div class="fd-text">
+      <a class="fd-title" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(title)}</a>
+      ${sub.map((s) => `<div class="fd-sub">${esc(s)}</div>`).join("")}
+      ${m.desc ? `<p class="fd-desc" data-fd="expand">${esc(stripTags(m.desc))}</p>` : ""}
+      ${snippet ? `<div class="fd-note" data-fd="note">${svg("bulb")}<span>${esc(snippet)}</span></div>` : ""}
+    </div>
+    <div class="fd-actions">
+      <a class="text-btn" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">Open</a>
+      ${pdf ? `<button class="text-btn" data-fd="pdf">Preview PDF</button>` : ""}
+      <button class="text-btn" data-fd="note">Note</button>
+    </div>
+    <div class="fd-pdf" hidden></div>`;
+}
+
+function buildFeedCard(it) {
+  const el = document.createElement("article");
+  el.className = "fd-card kind-" + it.c.kind;
+  el.dataset.key = it.key;
+  el.c = it.c; el.n = it.n;
+  el._c = it.c;
+  fillFeedCard(el);
+  if (feedIO) feedIO.observe(el); else requestMeta(it.c, el);
+  return el;
+}
+
+function renderFeed(list) {
+  const items = feedItems(list);
+  const shown = items.slice(0, state.limit);
+  D.feedChips.innerHTML = FEED_KINDS.map(([k, t]) =>
+    `<button class="fd-chip${state.feedKind === k ? " on" : ""}" data-kind="${k}">${t}</button>`).join("");
+
+  const live = new Set(shown.map((i) => i.key));
+  for (const [k, el] of feedCards) if (!live.has(k)) { el.remove(); feedCards.delete(k); }
+  let prev = null;
+  for (const it of shown) {
+    let el = feedCards.get(it.key);
+    if (!el) { el = buildFeedCard(it); feedCards.set(it.key, el); }
+    else if (el.n !== it.n || el._nsig !== it.n.updated_at) { el.n = it.n; fillFeedCard(el); }
+    el._nsig = it.n.updated_at;
+    const want = prev ? prev.nextSibling : D.feedList.firstChild;
+    if (el !== want) D.feedList.insertBefore(el, want);
+    prev = el;
+  }
+  return { total: items.length, shown: shown.length };
+}
+
+function playInline(el) {
+  const c = el.c;
+  const box = el.querySelector(".fd-media");
+  if (!box) return;
+  const src = c.type === "youtube"
+    ? `https://www.youtube-nocookie.com/embed/${c.id}?autoplay=1&playsinline=1&rel=0${c.start ? "&start=" + c.start : ""}`
+    : c.type === "ytlist" ? `https://www.youtube-nocookie.com/embed/videoseries?list=${c.id}&autoplay=1`
+    : `https://player.vimeo.com/video/${c.id}?autoplay=1`;
+  box.innerHTML = `<iframe src="${src}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen; web-share" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+}
+
+function onFeedClick(e) {
+  const chip = e.target.closest(".fd-chip");
+  if (chip) { state.feedKind = chip.dataset.kind; state.limit = PAGE; try { localStorage.setItem("nk_feed_kind", state.feedKind); } catch {} scheduleRender(); return; }
+  const el = e.target.closest(".fd-card");
+  if (!el) return;
+  const act = e.target.closest("[data-fd]")?.dataset.fd;
+  if (act === "play") { e.preventDefault(); playInline(el); }
+  else if (act === "expand") e.target.closest(".fd-desc").classList.toggle("open");
+  else if (act === "note") openEditor(el.n, el);
+  else if (act === "pdf") {
+    const box = el.querySelector(".fd-pdf");
+    box.hidden = !box.hidden;
+    if (!box.hidden && !box.firstChild)
+      box.innerHTML = `<iframe loading="lazy" src="https://docs.google.com/viewer?embedded=true&url=${encodeURIComponent(el.c.pdf)}"></iframe>`;
+  }
+}
+
+async function addFeedLink(raw) {
+  const url = raw.trim();
+  if (!/^https?:\/\//i.test(url)) { snack("Paste a link starting with http(s)://"); return; }
+  createNote({ body: url });
+  D.feedInput.value = "";
+  scheduleRender();
 }
 
 /* ── Masonry: shortest-column placement, transform-positioned so that
@@ -1089,10 +1444,12 @@ function renderNav() {
   const labels = allLabels();
   const rows = [];
   rows.push({ icon: "bulb", text: "Notes", view: "notes" });
+  rows.push({ icon: "feed", text: "Feed", view: "feed" });
   if (labels.length) rows.push({ sep: true });
   for (const l of labels) rows.push({ icon: "label", text: l, view: "label", label: l });
   rows.push({ icon: "edit", text: "Edit labels", action: "edit-labels" });
   rows.push({ sep: true });
+  rows.push({ icon: "obsidian", text: "Obsidian", view: "obsidian" });
   rows.push({ icon: "archive", text: "Archive", view: "archive" });
   rows.push({ icon: "trash", text: "Trash", view: "trash" });
 
@@ -1112,9 +1469,9 @@ function go(view, label = null) {
   state.limit = PAGE;
   clearSelection();
   if (state.search) { state.search = ""; D.search.value = ""; D.searchClear.hidden = true; }
-  document.title = view === "label" ? `${label} — Keep`
-    : view === "notes" ? "Keep"
-    : `${view[0].toUpperCase()}${view.slice(1)} — Keep`;
+  document.title = view === "label" ? `${label} — NoteKeeper`
+    : view === "notes" ? "NoteKeeper"
+    : `${view[0].toUpperCase()}${view.slice(1)} — NoteKeeper`;
   D.composer.parentElement.hidden = view !== "notes" && view !== "label";
   window.scrollTo({ top: 0 });
   if (window.innerWidth < 900) setNav(false);
@@ -1273,6 +1630,10 @@ function wire() {
     D.search.value = ""; D.searchClear.hidden = true;
     state.search = ""; state.limit = PAGE; scheduleRender(); D.search.focus();
   };
+
+  // feed
+  D.feed.addEventListener("click", onFeedClick);
+  D.feedForm.addEventListener("submit", (e) => { e.preventDefault(); addFeedLink(D.feedInput.value); });
 
   // nav
   D.navList.addEventListener("click", (e) => {
@@ -1560,6 +1921,9 @@ async function boot(user) {
     openComposer(false);
     if (title) D.cmpTitle.value = title;
     if (text) { D.cmpBody.value = text; autoGrow(D.cmpBody); }
+    history.replaceState({}, "", location.pathname);
+  } else if (p.get("view") === "feed") {
+    go("feed");
     history.replaceState({}, "", location.pathname);
   } else if (p.get("new")) {
     openComposer(p.get("new") === "list");

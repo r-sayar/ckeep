@@ -9,7 +9,7 @@
 <link rel="manifest" href="/manifest.json" />
 <link rel="icon" href="/icon.svg" type="image/svg+xml" />
 <link rel="apple-touch-icon" href="/icon.svg" />
-<title>Keep</title>
+<title>NoteKeeper</title>
 <script>
   /* Synchronous bootstrap. Runs before CSS paints so there is never a flash of
      the wrong theme or the wrong screen.
@@ -60,7 +60,7 @@
 <!-- ══ Sign in ══ -->
 <div id="auth-screen">
   <div class="auth-card">
-    <div class="auth-logo"><span class="k">Ke</span><span class="e">e</span><span class="k">p</span></div>
+    <div class="auth-logo"><span class="k">Note</span><span class="e">Kee</span><span class="k">per</span></div>
     <p>Sign in with your email and we'll send you a one-tap link. No password.</p>
     <form id="auth-form">
       <input id="email" type="email" placeholder="you@example.com" required autocomplete="email" />
@@ -73,7 +73,7 @@
 <!-- ══ Top app bar ══ -->
 <header id="topbar">
   <button class="icon-btn" id="menu-btn" title="Main menu" aria-label="Main menu"></button>
-  <div class="brand"><span class="mark"></span><span class="word">Keep</span></div>
+  <div class="brand"><span class="mark"></span><span class="word">NoteKeeper</span></div>
 
   <div class="search-shell">
     <div class="search-box">
@@ -144,6 +144,15 @@
   <section class="grid-section" id="sec-others">
     <h2 class="section-label" id="others-label" hidden>Others</h2>
     <div class="grid" id="grid-others"></div>
+  </section>
+
+  <section id="feed" hidden>
+    <form id="feed-add" autocomplete="off">
+      <input id="feed-input" type="url" inputmode="url" placeholder="Paste a link: YouTube, paper, anything" />
+      <button class="text-btn" type="submit">Add</button>
+    </form>
+    <div id="feed-chips" class="fd-chips"></div>
+    <div id="feed-list"></div>
   </section>
 
   <div id="sentinel"></div>

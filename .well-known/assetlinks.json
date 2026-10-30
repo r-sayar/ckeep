@@ -1,0 +1,10 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.notekeeper",
+      "sha256_cert_fingerprints": ["85:A0:90:48:E3:AB:70:6F:01:3B:F9:AA:B1:83:4F:3B:A8:CF:15:DC:71:ED:CC:6F:C7:8F:6D:FB:B9:B2:0A:56"]
+    }
+  }
+]

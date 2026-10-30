@@ -1,0 +1,49 @@
+plugins {
+    id "com.android.application"
+}
+
+// Signing key lives outside the repo: ~/.config/notekeeper/notekeeper.jks,
+// password in keystore-pass.txt next to it. Its SHA-256 is published in
+// /.well-known/assetlinks.json so Chrome runs the app full-screen (no URL bar).
+def keyDir = new File(System.getProperty("user.home"), ".config/notekeeper")
+def keyPass = new File(keyDir, "keystore-pass.txt")
+
+android {
+    namespace "app.notekeeper"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "app.notekeeper"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    signingConfigs {
+        release {
+            if (keyPass.exists()) {
+                storeFile new File(keyDir, "notekeeper.jks")
+                storePassword keyPass.text.trim()
+                keyAlias "notekeeper"
+                keyPassword keyPass.text.trim()
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation "com.google.androidbrowserhelper:androidbrowserhelper:2.5.0"
+}

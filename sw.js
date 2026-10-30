@@ -1,10 +1,10 @@
-/* Keep — service worker.
+/* NoteKeeper — service worker.
 
    The app shell is fetched network-first so a deploy lands on the next load
    instead of being pinned to whatever was cached first; the cache is the
    offline fallback, not the source of truth. Everything else is cache-first. */
 
-const CACHE = "keep-v7";
+const CACHE = "notekeeper-v8";
 const SHELL = ["/", "/index.html", "/app.css", "/app.js", "/manifest.json", "/icon.svg"];
 const FRESH = new Set(["/", "/index.html", "/app.css", "/app.js"]);
 
